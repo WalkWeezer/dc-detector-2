@@ -34,7 +34,7 @@ if errorlevel 1 (
 REM Copy example config if no config.yaml exists
 if not exist "config.yaml" (
     echo No config.yaml found — copying from config.example.yaml
-    copy config.example.yaml config.yaml >nul
+    copy config.example.yaml config.yaml 1>NUL 2>NUL
 )
 
 REM Set PYTHONPATH
