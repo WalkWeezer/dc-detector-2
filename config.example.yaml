@@ -50,9 +50,9 @@ detection:
 # ---------------------------------------------------------------------------
 mavlink:
   enabled: true
-  # Device: /dev/ttyAMA3 on Pi (UART3, GPIO4/5), COM3 on Windows
-  # Requires: dtoverlay=uart3-pi5 in /boot/firmware/config.txt
-  device: "/dev/ttyAMA3"
+  # Device: /dev/ttyAMA1 on Pi (UART1, GPIO0 TX / GPIO1 RX), COM3 on Windows
+  # Requires: dtoverlay=uart1-pi5 in /boot/firmware/config.txt
+  device: "/dev/ttyAMA1"
   baudrate: 57600
   # Port for MAVLink REST / WebSocket API
   port: 8003

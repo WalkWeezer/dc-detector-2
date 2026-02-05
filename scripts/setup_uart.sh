@@ -3,7 +3,7 @@
 #
 # Enables the two UARTs needed by DC-Detector:
 #   UART0 (/dev/ttyAMA0, GPIO14 TX / GPIO15 RX) — LoRa / ESP32
-#   UART3 (/dev/ttyAMA3, GPIO4  TX / GPIO5  RX) — MAVLink flight controller
+#   UART1 (/dev/ttyAMA1, GPIO0  TX / GPIO1  RX) — MAVLink flight controller
 #
 # Also:
 #   - Disables serial console (getty) on UART0 so LoRa can use it
@@ -37,7 +37,7 @@ echo "============================================================"
 echo ""
 echo " Will configure:"
 echo "   UART0 /dev/ttyAMA0 (GPIO14/15) — LoRa / ESP32"
-echo "   UART3 /dev/ttyAMA3 (GPIO4/5)   — MAVLink FC"
+echo "   UART1 /dev/ttyAMA1 (GPIO0/1)   — MAVLink FC"
 echo "   Disable serial console on UART0"
 echo "   Bluetooth is NOT affected"
 echo ""
@@ -69,8 +69,8 @@ else
 # UART0 (GPIO14/15) for LoRa/ESP32
 enable_uart=1
 dtparam=uart0=on
-# UART3 (GPIO4/5) for MAVLink flight controller
-dtoverlay=uart3-pi5
+# UART1 (GPIO0/1) for MAVLink flight controller
+dtoverlay=uart1-pi5
 EOF
     echo ""
     echo "--- UART overlays added to $BOOT_CONFIG ---"
@@ -97,11 +97,11 @@ echo " UART setup complete!  Bluetooth is preserved."
 echo ""
 echo " After reboot, verify with:"
 echo "   ls -la /dev/ttyAMA0   # LoRa (GPIO14/15)"
-echo "   ls -la /dev/ttyAMA3   # MAVLink (GPIO4/5)"
+echo "   ls -la /dev/ttyAMA1   # MAVLink (GPIO0/1)"
 echo ""
 echo " Test with:"
 echo "   python tools/check_uart.py --port /dev/ttyAMA0 --listen 5"
-echo "   python tools/check_uart.py --port /dev/ttyAMA3 --listen 5"
+echo "   python tools/check_uart.py --port /dev/ttyAMA1 --listen 5"
 echo ""
 echo " REBOOT NOW:  sudo reboot"
 echo "============================================================"

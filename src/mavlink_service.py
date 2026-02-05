@@ -30,7 +30,7 @@ from log_config import setup_logging  # noqa: E402
 cfg = load_config()
 mav_cfg = get_section(cfg, "mavlink")
 ENABLED = mav_cfg.get("enabled", True)
-DEVICE = mav_cfg.get("device", "/dev/ttyAMA3")
+DEVICE = mav_cfg.get("device", "/dev/ttyAMA1")
 BAUDRATE = int(mav_cfg.get("baudrate", 57600))
 PORT = int(mav_cfg.get("port", 8003))
 
