@@ -3,7 +3,9 @@
     "allow": [
       "Bash(dir /s \"c:\\\\Users\\\\borov\\\\source\\\\projects\\\\DC-Detector-v0.2\")",
       "Bash(findstr:*)",
-      "Bash(del \"\\\\?\\\\c:\\\\Users\\\\borov\\\\source\\\\projects\\\\DC-Detector-v0.2\\\\nul\")"
+      "Bash(del \"\\\\?\\\\c:\\\\Users\\\\borov\\\\source\\\\projects\\\\DC-Detector-v0.2\\\\nul\")",
+      "Bash(git status:*)",
+      "Bash(git commit -m \"$\\(cat <<''EOF''\nFix launch.bat: prevent ''nul'' file creation when run from PowerShell\n\nReplace >nul with 1>NUL 2>NUL to avoid creating a file named ''nul''\nwhich blocks git operations on Windows.\n\nCo-Authored-By: Claude Opus 4.5 <noreply@anthropic.com>\nEOF\n\\)\")"
     ]
   }
 }

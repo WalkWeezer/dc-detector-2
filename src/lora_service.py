@@ -27,7 +27,7 @@ from log_config import setup_logging  # noqa: E402
 cfg = load_config()
 lora_cfg = get_section(cfg, "lora")
 ENABLED = lora_cfg.get("enabled", True)
-DEVICE = lora_cfg.get("device", "/dev/ttyUSB0")
+DEVICE = lora_cfg.get("device", "/dev/ttyAMA0")
 BAUDRATE = int(lora_cfg.get("baudrate", 115200))
 PORT = int(lora_cfg.get("port", 8004))
 

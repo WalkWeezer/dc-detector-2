@@ -50,19 +50,21 @@ detection:
 # ---------------------------------------------------------------------------
 mavlink:
   enabled: true
-  # Device: /dev/ttyAMA0 on Pi, COM3 on Windows, etc.
-  device: "/dev/ttyAMA0"
+  # Device: /dev/ttyAMA3 on Pi (UART3, GPIO4/5), COM3 on Windows
+  # Requires: dtoverlay=uart3-pi5 in /boot/firmware/config.txt
+  device: "/dev/ttyAMA3"
   baudrate: 57600
   # Port for MAVLink REST / WebSocket API
   port: 8003
 
 # ---------------------------------------------------------------------------
-# LoRa / ESP32 (UART)
+# LoRa / ESP32 (GPIO UART)
 # ---------------------------------------------------------------------------
 lora:
   enabled: true
-  # Device: /dev/ttyUSB0 on Pi, COM4 on Windows, etc.
-  device: "/dev/ttyUSB0"
+  # Device: /dev/ttyAMA0 on Pi (UART0, GPIO14/15), COM4 on Windows
+  # Requires: dtparam=uart0=on + dtoverlay=disable-bt in /boot/firmware/config.txt
+  device: "/dev/ttyAMA0"
   baudrate: 115200
   # Port for LoRa REST / WebSocket API
   port: 8004

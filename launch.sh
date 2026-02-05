@@ -21,8 +21,8 @@ fi
 source venv/bin/activate
 
 echo "Installing / updating dependencies..."
-pip install --quiet --upgrade pip
-pip install --quiet -r requirements.txt
+python -m pip install --upgrade pip
+python -m pip install -r requirements.txt
 
 # Copy example config if needed
 if [ ! -f "config.yaml" ]; then
