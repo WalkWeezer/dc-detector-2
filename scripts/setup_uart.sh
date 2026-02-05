@@ -5,7 +5,8 @@
 #   UART0 (/dev/ttyAMA0, GPIO14 TX / GPIO15 RX) — LoRa / ESP32
 #   UART3 (/dev/ttyAMA3, GPIO4  TX / GPIO5  RX) — MAVLink flight controller
 #
-# Bluetooth is moved off UART0 (disabled) so LoRa can use it.
+# On Pi 5, Bluetooth uses a separate internal UART (not GPIO14/15),
+# so no need to disable BT — it keeps working normally.
 #
 # Run once:  sudo bash scripts/setup_uart.sh
 # Then reboot: sudo reboot
@@ -33,7 +34,7 @@ echo ""
 echo " Will enable:"
 echo "   UART0 /dev/ttyAMA0 (GPIO14/15) — LoRa / ESP32"
 echo "   UART3 /dev/ttyAMA3 (GPIO4/5)   — MAVLink FC"
-echo "   Bluetooth will be DISABLED to free UART0"
+echo "   Bluetooth is NOT affected (Pi 5 uses internal UART for BT)"
 echo ""
 
 # ---- Check if already configured ----
@@ -57,18 +58,12 @@ cat >> "$BOOT_CONFIG" <<'EOF'
 # UART0 (GPIO14/15) for LoRa/ESP32
 enable_uart=1
 dtparam=uart0=on
-# Disable Bluetooth to free UART0
-dtoverlay=disable-bt
 # UART3 (GPIO4/5) for MAVLink flight controller
 dtoverlay=uart3-pi5
 EOF
 
 echo ""
 echo "UART configuration added to $BOOT_CONFIG"
-
-# ---- Disable Bluetooth service (hciuart) ----
-systemctl disable hciuart 2>/dev/null || true
-echo "Bluetooth hciuart service disabled"
 
 # ---- Add user to dialout group ----
 CURRENT_USER="${SUDO_USER:-$USER}"
@@ -81,7 +76,7 @@ fi
 
 echo ""
 echo "============================================================"
-echo " UART setup complete!"
+echo " UART setup complete!  Bluetooth is preserved."
 echo ""
 echo " After reboot, verify with:"
 echo "   ls -la /dev/ttyAMA0   # LoRa (GPIO14/15)"

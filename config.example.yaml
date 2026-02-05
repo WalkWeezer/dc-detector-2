@@ -63,7 +63,7 @@ mavlink:
 lora:
   enabled: true
   # Device: /dev/ttyAMA0 on Pi (UART0, GPIO14/15), COM4 on Windows
-  # Requires: dtparam=uart0=on + dtoverlay=disable-bt in /boot/firmware/config.txt
+  # Requires: dtparam=uart0=on in /boot/firmware/config.txt (Pi 5: BT uses separate UART)
   device: "/dev/ttyAMA0"
   baudrate: 115200
   # Port for LoRa REST / WebSocket API
