@@ -9,7 +9,6 @@ WS   /ws          Real-time message push
 """
 
 import asyncio
-import json
 import os
 import sys
 import threading
@@ -30,6 +29,9 @@ ENABLED = lora_cfg.get("enabled", True)
 DEVICE = lora_cfg.get("device", "/dev/ttyAMA0")
 BAUDRATE = int(lora_cfg.get("baudrate", 115200))
 PORT = int(lora_cfg.get("port", 8004))
+TEL_ENABLED = lora_cfg.get("telemetry_forward", True)
+TEL_INTERVAL = float(lora_cfg.get("telemetry_interval", 2.0))
+MAV_PORT = int(cfg.get("mavlink", {}).get("port", 8003))
 
 log = setup_logging("lora", cfg)
 
@@ -42,6 +44,8 @@ log = setup_logging("lora", cfg)
 async def lifespan(application: FastAPI):
     if ENABLED:
         threading.Thread(target=_serial_loop, daemon=True).start()
+        if TEL_ENABLED:
+            threading.Thread(target=_telemetry_forward_loop, daemon=True).start()
         log.info("LoRa service started on port %d (device=%s)", PORT, DEVICE)
     else:
         log.info("LoRa service disabled in config")
@@ -107,6 +111,10 @@ def _serial_loop() -> None:
                         except (ValueError, IndexError):
                             pass
 
+                    # Tag telemetry messages
+                    if "TEL:" in line:
+                        msg["type"] = "telemetry_rx"
+
                     with _lock:
                         _messages.append(msg)
                         if len(_messages) > _MAX_MSG:
@@ -121,6 +129,44 @@ def _serial_loop() -> None:
 
 
 # ---------------------------------------------------------------------------
+# Telemetry forward thread
+# ---------------------------------------------------------------------------
+
+def _telemetry_forward_loop() -> None:
+    """Periodically fetch structured telemetry from mavlink_service and push to ESP32."""
+    try:
+        import httpx
+    except ImportError:
+        log.error("httpx not installed — telemetry forwarding disabled")
+        return
+
+    log.info("Telemetry forward thread started (interval=%.1fs, mavlink port=%d)", TEL_INTERVAL, MAV_PORT)
+    url = f"http://localhost:{MAV_PORT}/telemetry/lora"
+
+    while True:
+        time.sleep(TEL_INTERVAL)
+        if _serial_port is None or not _connected:
+            continue
+        try:
+            resp = httpx.get(url, timeout=2.0)
+            if resp.status_code == 200:
+                tel_string = resp.json().get("tel_string", "")
+                if tel_string and tel_string.startswith("TEL:"):
+                    payload = (tel_string + "\n").encode("utf-8")
+                    _serial_port.write(payload)
+                    with _lock:
+                        _messages.append({
+                            "direction": "tx",
+                            "data": tel_string,
+                            "ts": time.time(),
+                            "type": "telemetry",
+                        })
+                    log.debug("TEL forwarded to ESP32: %s", tel_string)
+        except Exception as exc:
+            log.debug("Telemetry forward error: %s", exc)
+
+
+# ---------------------------------------------------------------------------
 # REST
 # ---------------------------------------------------------------------------
 
@@ -132,6 +178,7 @@ async def get_status():
             "device": DEVICE,
             "baudrate": BAUDRATE,
             "total_messages": len(_messages),
+            "telemetry_forward": TEL_ENABLED,
         })
 
 

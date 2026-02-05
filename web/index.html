@@ -3,213 +3,373 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>DC-Detector v0.2 — Панель управления</title>
+<title>DC-Detector v0.2</title>
+<style>
+*{box-sizing:border-box;margin:0;padding:0}
+body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;background:#0f1117;color:#e0e0e0;padding:12px}
+h1{font-size:1.3rem;color:#fff;margin-bottom:8px}
+h2{font-size:1.1rem;color:#a0b0ff;margin:16px 0 8px;border-bottom:1px solid #2a2d3a;padding-bottom:4px}
+h3{font-size:.9rem;color:#8090c0;margin:10px 0 4px}
+
+/* Grid layout for telemetry */
+.tgrid{display:grid;grid-template-columns:repeat(auto-fit,minmax(250px,1fr));gap:10px;margin:8px 0}
+.tcard{background:#1a1d28;border:1px solid #2a2d3a;border-radius:8px;padding:10px}
+.tcard h3{margin:0 0 6px;font-size:.85rem;color:#7090d0;text-transform:uppercase;letter-spacing:.5px}
+.tcard .row{display:flex;justify-content:space-between;padding:2px 0;font-size:.85rem}
+.tcard .lbl{color:#8899aa}
+.tcard .val{color:#fff;font-weight:600;font-variant-numeric:tabular-nums}
+.tcard .val.warn{color:#ffa040}
+.tcard .val.crit{color:#ff4040}
+.tcard .val.ok{color:#40ff80}
+
+/* Status indicator */
+.status-dot{display:inline-block;width:8px;height:8px;border-radius:50%;margin-right:4px;background:#ff4040}
+.status-dot.on{background:#40ff80}
+
+/* Battery bar */
+.bat-bar-wrap{background:#2a2d3a;border-radius:3px;height:10px;margin-top:4px;overflow:hidden}
+.bat-bar{height:100%;border-radius:3px;transition:width .5s,background .5s}
+.bat-bar.high{background:#40ff80}
+.bat-bar.mid{background:#ffa040}
+.bat-bar.low{background:#ff4040}
+
+/* Mode badge */
+.mode-badge{display:inline-block;background:#2a3a5a;color:#80b0ff;border-radius:4px;padding:1px 8px;font-size:.8rem;font-weight:600}
+.armed-badge{background:#4a2020;color:#ff6060}
+.armed-badge.yes{background:#603010;color:#ff9040}
+
+/* Streams */
+.stream-row{display:flex;gap:10px;flex-wrap:wrap;margin:8px 0}
+.stream-box{background:#000;border:1px solid #2a2d3a;border-radius:6px;overflow:hidden;position:relative}
+.stream-box img{display:block;width:320px;height:320px;object-fit:contain;background:#111}
+.stream-label{position:absolute;top:4px;left:6px;background:rgba(0,0,0,.7);color:#fff;font-size:.7rem;padding:1px 6px;border-radius:3px}
+
+/* Buttons */
+button{background:#2a3a5a;color:#c0d0ff;border:1px solid #3a4a6a;border-radius:4px;padding:4px 12px;cursor:pointer;font-size:.8rem}
+button:hover{background:#3a4a6a}
+input[type=text]{background:#1a1d28;border:1px solid #2a2d3a;color:#e0e0e0;padding:4px 8px;border-radius:4px;font-size:.85rem}
+
+/* Tables */
+table{border-collapse:collapse;width:100%;font-size:.8rem;margin:4px 0}
+th{background:#1a1d28;color:#8090c0;padding:4px 8px;text-align:left;border-bottom:1px solid #2a2d3a}
+td{padding:3px 8px;border-bottom:1px solid #1a1d28}
+a{color:#6090e0}
+
+/* Log */
+details{margin:8px 0}
+summary{cursor:pointer;color:#7080a0;font-size:.8rem}
+pre.log{max-height:120px;overflow:auto;background:#0a0c12;border:1px solid #1a1d28;padding:4px;font-size:.75rem;color:#7080a0;border-radius:4px}
+
+/* Section */
+.section{margin-bottom:16px}
+.controls{display:flex;gap:6px;align-items:center;flex-wrap:wrap;margin:6px 0}
+.footer{text-align:center;color:#4a5060;font-size:.75rem;margin-top:20px;padding:8px;border-top:1px solid #1a1d28}
+</style>
 </head>
 <body>
+
 <h1>DC-Detector v0.2</h1>
-<p>Панель управления системой детекции. Все эндпоинты и WebSocket-подключения перечислены ниже.</p>
-<hr>
+<div style="font-size:.8rem;color:#5a6a80;margin-bottom:12px">
+  <span class="status-dot" id="mav-dot"></span> MAVLink
+  &nbsp;&nbsp;
+  <span class="status-dot" id="lora-dot"></span> LoRa
+  &nbsp;&nbsp;
+  <span id="last-update" style="color:#4a5a70">---</span>
+</div>
 
-<!-- ================================================================== -->
-<h2>1. Захват видео (Capture) — порт <span id="cap-port">8001</span></h2>
+<!-- ============================================================ -->
+<h2>Telemetry</h2>
+<div class="tgrid">
+  <!-- GPS -->
+  <div class="tcard">
+    <h3>GPS</h3>
+    <div class="row"><span class="lbl">Lat</span><span class="val" id="t-lat">---</span></div>
+    <div class="row"><span class="lbl">Lon</span><span class="val" id="t-lon">---</span></div>
+    <div class="row"><span class="lbl">Alt MSL</span><span class="val" id="t-alt-msl">---</span></div>
+    <div class="row"><span class="lbl">Alt REL</span><span class="val" id="t-alt-rel">---</span></div>
+    <div class="row"><span class="lbl">Fix</span><span class="val" id="t-fix">---</span></div>
+    <div class="row"><span class="lbl">Sats</span><span class="val" id="t-sats">---</span></div>
+    <div class="row"><span class="lbl">HDOP</span><span class="val" id="t-hdop">---</span></div>
+  </div>
 
-<h3>REST API</h3>
-<table border="1" cellpadding="4">
-<tr><th>Метод</th><th>URL</th><th>Описание</th></tr>
-<tr><td>GET</td><td><a id="link-stream" href="http://localhost:8001/stream" target="_blank">/stream</a></td><td>MJPEG-поток (можно вставить в &lt;img&gt;)</td></tr>
-<tr><td>GET</td><td><a id="link-frame" href="http://localhost:8001/frame" target="_blank">/frame</a></td><td>Один JPEG-кадр</td></tr>
-<tr><td>POST</td><td>/recording/start</td><td>Начать запись</td></tr>
-<tr><td>POST</td><td>/recording/stop</td><td>Остановить запись</td></tr>
-<tr><td>GET</td><td><a id="link-recs" href="http://localhost:8001/recordings" target="_blank">/recordings</a></td><td>Список записанных файлов</td></tr>
-<tr><td>GET</td><td>/recordings/{name}</td><td>Скачать файл записи</td></tr>
-<tr><td>POST</td><td>/playback</td><td>Воспроизвести запись <code>{"filename":"..."}</code></td></tr>
-<tr><td>POST</td><td>/playback/stop</td><td>Вернуться к камере</td></tr>
-</table>
+  <!-- Flight -->
+  <div class="tcard">
+    <h3>Flight</h3>
+    <div class="row"><span class="lbl">Mode</span><span id="t-mode"><span class="mode-badge">---</span></span></div>
+    <div class="row"><span class="lbl">Armed</span><span id="t-armed"><span class="armed-badge">---</span></span></div>
+    <div class="row"><span class="lbl">GndSpeed</span><span class="val" id="t-speed">---</span></div>
+    <div class="row"><span class="lbl">AirSpeed</span><span class="val" id="t-airspeed">---</span></div>
+    <div class="row"><span class="lbl">Heading</span><span class="val" id="t-heading">---</span></div>
+    <div class="row"><span class="lbl">Climb</span><span class="val" id="t-climb">---</span></div>
+    <div class="row"><span class="lbl">Throttle</span><span class="val" id="t-throttle">---</span></div>
+  </div>
 
-<h3>WebSocket</h3>
-<p>Подключение: <code id="ws-cap-url">ws://localhost:8001/ws</code></p>
-<button onclick="connectWS('cap')">Подключить</button>
-<button onclick="disconnectWS('cap')">Отключить</button>
-<pre id="ws-cap-log" style="max-height:150px;overflow:auto;border:1px solid #ccc;padding:4px;"></pre>
+  <!-- Battery -->
+  <div class="tcard">
+    <h3>Battery</h3>
+    <div class="row"><span class="lbl">Voltage</span><span class="val" id="t-bat-v">---</span></div>
+    <div class="row"><span class="lbl">Current</span><span class="val" id="t-bat-a">---</span></div>
+    <div class="row"><span class="lbl">Remaining</span><span class="val" id="t-bat-pct">---</span></div>
+    <div class="bat-bar-wrap"><div class="bat-bar high" id="t-bat-bar" style="width:0%"></div></div>
+  </div>
 
-<h3>Видеопоток (MJPEG)</h3>
-<img id="mjpeg-stream" width="320" height="320" alt="MJPEG stream">
-<br><button onclick="startStream()">Показать поток</button>
+  <!-- Attitude -->
+  <div class="tcard">
+    <h3>Attitude</h3>
+    <div class="row"><span class="lbl">Roll</span><span class="val" id="t-roll">---</span></div>
+    <div class="row"><span class="lbl">Pitch</span><span class="val" id="t-pitch">---</span></div>
+    <div class="row"><span class="lbl">Yaw</span><span class="val" id="t-yaw">---</span></div>
+  </div>
+</div>
 
-<h3>Управление записью</h3>
-<button onclick="postAction('cap','recording/start')">Начать запись</button>
-<button onclick="postAction('cap','recording/stop')">Остановить</button>
-<pre id="cap-result" style="border:1px solid #ccc;padding:4px;"></pre>
+<!-- ============================================================ -->
+<h2>Video</h2>
+<div class="stream-row">
+  <div class="stream-box">
+    <span class="stream-label">Capture</span>
+    <img id="mjpeg-stream" alt="Capture stream">
+  </div>
+  <div class="stream-box">
+    <span class="stream-label">Detection</span>
+    <img id="det-stream" alt="Detection stream">
+  </div>
+</div>
+<div class="controls">
+  <button onclick="startStream()">Capture stream</button>
+  <button onclick="startDetStream()">Detection stream</button>
+  <button onclick="postAction('cap','recording/start')">Rec Start</button>
+  <button onclick="postAction('cap','recording/stop')">Rec Stop</button>
+</div>
+<pre class="log" id="cap-result" style="display:none"></pre>
 
-<hr>
+<!-- ============================================================ -->
+<h2>LoRa</h2>
+<div class="controls">
+  <input id="lora-text" type="text" placeholder="Message..." size="30">
+  <button onclick="loraSend()">Send</button>
+</div>
+<pre class="log" id="lora-result" style="max-height:80px;margin-top:6px"></pre>
 
-<!-- ================================================================== -->
-<h2>2. Детекция (Detection) — порт <span id="det-port">8002</span></h2>
+<!-- ============================================================ -->
+<h2>API</h2>
+<div class="tgrid">
+  <div class="tcard">
+    <h3>Capture :<span id="cap-port">8001</span></h3>
+    <div style="font-size:.8rem">
+      <a id="link-stream" href="#" target="_blank">/stream</a> |
+      <a id="link-frame" href="#" target="_blank">/frame</a> |
+      <a id="link-recs" href="#" target="_blank">/recordings</a>
+    </div>
+  </div>
+  <div class="tcard">
+    <h3>Detection :<span id="det-port">8002</span></h3>
+    <div style="font-size:.8rem">
+      <a id="link-tracks" href="#" target="_blank">/tracks</a> |
+      <a id="link-dets" href="#" target="_blank">/detections</a> |
+      <a id="link-det-stream" href="#" target="_blank">/stream</a>
+    </div>
+  </div>
+  <div class="tcard">
+    <h3>MAVLink :<span id="mav-port">8003</span></h3>
+    <div style="font-size:.8rem">
+      <a id="link-telem" href="#" target="_blank">/telemetry/structured</a> |
+      <a id="link-mav-status" href="#" target="_blank">/status</a>
+    </div>
+  </div>
+  <div class="tcard">
+    <h3>LoRa :<span id="lora-port">8004</span></h3>
+    <div style="font-size:.8rem">
+      <a id="link-lora-status" href="#" target="_blank">/status</a> |
+      <a id="link-lora-msgs" href="#" target="_blank">/messages</a>
+    </div>
+  </div>
+</div>
 
-<h3>REST API</h3>
-<table border="1" cellpadding="4">
-<tr><th>Метод</th><th>URL</th><th>Описание</th></tr>
-<tr><td>GET</td><td><a id="link-tracks" href="http://localhost:8002/tracks" target="_blank">/tracks</a></td><td>Текущие активные треки</td></tr>
-<tr><td>GET</td><td><a id="link-dets" href="http://localhost:8002/detections" target="_blank">/detections</a></td><td>Все детекции текущей сессии</td></tr>
-<tr><td>GET</td><td>/media/{path}</td><td>JPEG / GIF детекции</td></tr>
-<tr><td>GET</td><td><a id="link-det-stream" href="http://localhost:8002/stream" target="_blank">/stream</a></td><td>Аннотированный MJPEG-поток (с рамками)</td></tr>
-</table>
+<!-- ============================================================ -->
+<details>
+  <summary>WebSocket logs</summary>
+  <h3>MAVLink WS</h3><pre class="log" id="ws-mav-log"></pre>
+  <h3>LoRa WS</h3><pre class="log" id="ws-lora-log"></pre>
+  <h3>Detection WS</h3><pre class="log" id="ws-det-log"></pre>
+  <h3>Capture WS</h3><pre class="log" id="ws-cap-log"></pre>
+</details>
 
-<h3>WebSocket</h3>
-<p>Подключение: <code id="ws-det-url">ws://localhost:8002/ws</code></p>
-<button onclick="connectWS('det')">Подключить</button>
-<button onclick="disconnectWS('det')">Отключить</button>
-<pre id="ws-det-log" style="max-height:150px;overflow:auto;border:1px solid #ccc;padding:4px;"></pre>
+<div class="footer">DC-Detector v0.2 &mdash; Raspberry Pi 5</div>
 
-<h3>Аннотированный поток</h3>
-<img id="det-stream" width="320" height="320" alt="Detection stream">
-<br><button onclick="startDetStream()">Показать поток детекции</button>
-
-<hr>
-
-<!-- ================================================================== -->
-<h2>3. MAVLink (Flight Controller) — порт <span id="mav-port">8003</span></h2>
-
-<h3>REST API</h3>
-<table border="1" cellpadding="4">
-<tr><th>Метод</th><th>URL</th><th>Описание</th></tr>
-<tr><td>GET</td><td><a id="link-telem" href="http://localhost:8003/telemetry" target="_blank">/telemetry</a></td><td>Последний снимок телеметрии</td></tr>
-<tr><td>GET</td><td><a id="link-mav-status" href="http://localhost:8003/status" target="_blank">/status</a></td><td>Статус подключения</td></tr>
-<tr><td>GET</td><td><a id="link-mav-msgs" href="http://localhost:8003/messages" target="_blank">/messages</a></td><td>Последние MAVLink-сообщения</td></tr>
-<tr><td>POST</td><td>/command</td><td>Отправить команду <code>{"msg_type":"...","params":{...}}</code></td></tr>
-</table>
-
-<h3>WebSocket</h3>
-<p>Подключение: <code id="ws-mav-url">ws://localhost:8003/ws</code></p>
-<button onclick="connectWS('mav')">Подключить</button>
-<button onclick="disconnectWS('mav')">Отключить</button>
-<pre id="ws-mav-log" style="max-height:150px;overflow:auto;border:1px solid #ccc;padding:4px;"></pre>
-
-<hr>
-
-<!-- ================================================================== -->
-<h2>4. LoRa / ESP32 — порт <span id="lora-port">8004</span></h2>
-
-<h3>REST API</h3>
-<table border="1" cellpadding="4">
-<tr><th>Метод</th><th>URL</th><th>Описание</th></tr>
-<tr><td>GET</td><td><a id="link-lora-status" href="http://localhost:8004/status" target="_blank">/status</a></td><td>Статус подключения</td></tr>
-<tr><td>GET</td><td><a id="link-lora-msgs" href="http://localhost:8004/messages" target="_blank">/messages</a></td><td>Принятые сообщения</td></tr>
-<tr><td>POST</td><td>/send</td><td>Отправить сообщение <code>{"text":"..."}</code></td></tr>
-</table>
-
-<h3>WebSocket</h3>
-<p>Подключение: <code id="ws-lora-url">ws://localhost:8004/ws</code></p>
-<button onclick="connectWS('lora')">Подключить</button>
-<button onclick="disconnectWS('lora')">Отключить</button>
-<pre id="ws-lora-log" style="max-height:150px;overflow:auto;border:1px solid #ccc;padding:4px;"></pre>
-
-<h3>Отправка сообщения</h3>
-<input id="lora-text" type="text" placeholder="Текст сообщения" size="40">
-<button onclick="loraSend()">Отправить</button>
-<pre id="lora-result" style="border:1px solid #ccc;padding:4px;"></pre>
-
-<hr>
-
-<!-- ================================================================== -->
-<h2>5. Конфигурация портов</h2>
-<p>Все порты настраиваются в <code>config.yaml</code>. Текущие значения загружены из
-<a href="/api/services" target="_blank">/api/services</a>.</p>
-
-<hr>
-<p><small>DC-Detector v0.2 &mdash; Raspberry Pi 5</small></p>
-
-<!-- ================================================================== -->
+<!-- ============================================================ -->
 <script>
-// --- Port configuration (loaded dynamically) ---
-const ports = {cap: 8001, det: 8002, mav: 8003, lora: 8004};
-const sockets = {};
+const ports = {cap:8001, det:8002, mav:8003, lora:8004};
+const host = location.hostname || 'localhost';
+let mavWs = null, loraWs = null;
 
-fetch('/api/services').then(r => r.json()).then(data => {
-    ports.cap  = data.capture.port;
-    ports.det  = data.detection.port;
-    ports.mav  = data.mavlink.port;
-    ports.lora = data.lora.port;
-    document.getElementById('cap-port').textContent  = ports.cap;
-    document.getElementById('det-port').textContent  = ports.det;
-    document.getElementById('mav-port').textContent  = ports.mav;
-    document.getElementById('lora-port').textContent = ports.lora;
-    // Update links
-    const host = location.hostname;
-    document.getElementById('link-stream').href      = `http://${host}:${ports.cap}/stream`;
-    document.getElementById('link-frame').href       = `http://${host}:${ports.cap}/frame`;
-    document.getElementById('link-recs').href        = `http://${host}:${ports.cap}/recordings`;
-    document.getElementById('link-tracks').href      = `http://${host}:${ports.det}/tracks`;
-    document.getElementById('link-dets').href        = `http://${host}:${ports.det}/detections`;
-    document.getElementById('link-det-stream').href  = `http://${host}:${ports.det}/stream`;
-    document.getElementById('link-telem').href       = `http://${host}:${ports.mav}/telemetry`;
-    document.getElementById('link-mav-status').href  = `http://${host}:${ports.mav}/status`;
-    document.getElementById('link-mav-msgs').href    = `http://${host}:${ports.mav}/messages`;
-    document.getElementById('link-lora-status').href = `http://${host}:${ports.lora}/status`;
-    document.getElementById('link-lora-msgs').href   = `http://${host}:${ports.lora}/messages`;
-    // WS URLs
-    document.getElementById('ws-cap-url').textContent  = `ws://${host}:${ports.cap}/ws`;
-    document.getElementById('ws-det-url').textContent  = `ws://${host}:${ports.det}/ws`;
-    document.getElementById('ws-mav-url').textContent  = `ws://${host}:${ports.mav}/ws`;
-    document.getElementById('ws-lora-url').textContent = `ws://${host}:${ports.lora}/ws`;
-}).catch(() => {});
+// --- Load ports from web_server API ---
+fetch('/api/services').then(r=>r.json()).then(d=>{
+  ports.cap=d.capture.port; ports.det=d.detection.port;
+  ports.mav=d.mavlink.port; ports.lora=d.lora.port;
+  updateLinks();
+  connectMavWS();
+  connectLoraWS();
+}).catch(()=>{
+  updateLinks();
+  connectMavWS();
+  connectLoraWS();
+});
 
-// --- WebSocket helpers ---
-function wsUrl(svc) {
-    const host = location.hostname || 'localhost';
-    return `ws://${host}:${ports[svc]}/ws`;
+function updateLinks(){
+  const s=(id,p,path)=>{const el=document.getElementById(id);if(el)el.href=`http://${host}:${p}${path}`;};
+  s('link-stream',ports.cap,'/stream'); s('link-frame',ports.cap,'/frame');
+  s('link-recs',ports.cap,'/recordings'); s('link-tracks',ports.det,'/tracks');
+  s('link-dets',ports.det,'/detections'); s('link-det-stream',ports.det,'/stream');
+  s('link-telem',ports.mav,'/telemetry/structured'); s('link-mav-status',ports.mav,'/status');
+  s('link-lora-status',ports.lora,'/status'); s('link-lora-msgs',ports.lora,'/messages');
+  document.getElementById('cap-port').textContent=ports.cap;
+  document.getElementById('det-port').textContent=ports.det;
+  document.getElementById('mav-port').textContent=ports.mav;
+  document.getElementById('lora-port').textContent=ports.lora;
 }
 
-function connectWS(svc) {
-    if (sockets[svc]) sockets[svc].close();
-    const url = wsUrl(svc);
-    const ws = new WebSocket(url);
-    const logEl = document.getElementById(`ws-${svc}-log`);
-    ws.onopen = () => { logEl.textContent += '[connected]\n'; };
-    ws.onmessage = (e) => {
-        logEl.textContent += e.data.substring(0, 300) + '\n';
-        logEl.scrollTop = logEl.scrollHeight;
-    };
-    ws.onclose = () => { logEl.textContent += '[disconnected]\n'; };
-    ws.onerror = () => { logEl.textContent += '[error]\n'; };
-    sockets[svc] = ws;
+// --- MAVLink WebSocket (auto-connect + telemetry) ---
+function connectMavWS(){
+  if(mavWs && mavWs.readyState<2) return;
+  const url=`ws://${host}:${ports.mav}/ws`;
+  mavWs=new WebSocket(url);
+  const log=document.getElementById('ws-mav-log');
+  mavWs.onopen=()=>{
+    document.getElementById('mav-dot').classList.add('on');
+    log.textContent+='[connected]\n';
+  };
+  mavWs.onmessage=(e)=>{
+    try{
+      const d=JSON.parse(e.data);
+      if(d.structured) updateTelemetry(d.structured);
+      if(d.connected!==undefined){
+        const dot=document.getElementById('mav-dot');
+        d.connected?dot.classList.add('on'):dot.classList.remove('on');
+      }
+    }catch(ex){}
+    log.textContent+=e.data.substring(0,200)+'\n';
+    if(log.textContent.length>20000) log.textContent=log.textContent.slice(-10000);
+    log.scrollTop=log.scrollHeight;
+  };
+  mavWs.onclose=()=>{
+    document.getElementById('mav-dot').classList.remove('on');
+    log.textContent+='[disconnected]\n';
+    setTimeout(connectMavWS,3000);
+  };
+  mavWs.onerror=()=>{};
 }
 
-function disconnectWS(svc) {
-    if (sockets[svc]) { sockets[svc].close(); sockets[svc] = null; }
+// --- LoRa WebSocket (auto-connect) ---
+function connectLoraWS(){
+  if(loraWs && loraWs.readyState<2) return;
+  const url=`ws://${host}:${ports.lora}/ws`;
+  loraWs=new WebSocket(url);
+  const log=document.getElementById('ws-lora-log');
+  loraWs.onopen=()=>{
+    document.getElementById('lora-dot').classList.add('on');
+    log.textContent+='[connected]\n';
+  };
+  loraWs.onmessage=(e)=>{
+    try{
+      const d=JSON.parse(e.data);
+      if(d.connected!==undefined){
+        const dot=document.getElementById('lora-dot');
+        d.connected?dot.classList.add('on'):dot.classList.remove('on');
+      }
+    }catch(ex){}
+    log.textContent+=e.data.substring(0,200)+'\n';
+    if(log.textContent.length>20000) log.textContent=log.textContent.slice(-10000);
+    log.scrollTop=log.scrollHeight;
+  };
+  loraWs.onclose=()=>{
+    document.getElementById('lora-dot').classList.remove('on');
+    log.textContent+='[disconnected]\n';
+    setTimeout(connectLoraWS,3000);
+  };
+  loraWs.onerror=()=>{};
 }
 
-// --- MJPEG stream ---
-function startStream() {
-    const host = location.hostname || 'localhost';
-    document.getElementById('mjpeg-stream').src = `http://${host}:${ports.cap}/stream`;
-}
-function startDetStream() {
-    const host = location.hostname || 'localhost';
-    document.getElementById('det-stream').src = `http://${host}:${ports.det}/stream`;
+// --- Update telemetry UI ---
+const FIX_NAMES={0:'No GPS',1:'No Fix',2:'2D',3:'3D',4:'DGPS',5:'RTK Float',6:'RTK Fixed'};
+function updateTelemetry(t){
+  if(!t) return;
+  const ts=new Date().toLocaleTimeString();
+  document.getElementById('last-update').textContent='Updated: '+ts;
+
+  // GPS
+  const g=t.gps||{};
+  setText('t-lat',(g.lat||0).toFixed(6));
+  setText('t-lon',(g.lon||0).toFixed(6));
+  setText('t-alt-msl',(g.alt_msl||0).toFixed(1)+' m');
+  setText('t-alt-rel',(g.alt_rel||0).toFixed(1)+' m');
+  setText('t-fix',FIX_NAMES[g.fix_type]||g.fix_type);
+  setText('t-sats',g.satellites||0);
+  setText('t-hdop',(g.hdop||0).toFixed(1));
+
+  // Flight
+  const h=t.heartbeat||{};
+  const v=t.vfr||{};
+  document.getElementById('t-mode').innerHTML=`<span class="mode-badge">${h.mode||'N/A'}</span>`;
+  const armed=h.armed;
+  document.getElementById('t-armed').innerHTML=armed
+    ?'<span class="armed-badge yes">ARMED</span>'
+    :'<span class="armed-badge">DISARMED</span>';
+  setText('t-speed',(v.groundspeed||0).toFixed(1)+' m/s');
+  setText('t-airspeed',(v.airspeed||0).toFixed(1)+' m/s');
+  setText('t-heading',(v.heading||0)+'\u00b0');
+  setText('t-climb',(v.climb||0).toFixed(1)+' m/s');
+  setText('t-throttle',(v.throttle||0)+'%');
+
+  // Battery
+  const b=t.battery||{};
+  setText('t-bat-v',(b.voltage||0).toFixed(1)+' V');
+  setText('t-bat-a',(b.current||0).toFixed(1)+' A');
+  const pct=b.remaining>=0?b.remaining:-1;
+  if(pct>=0){
+    setText('t-bat-pct',pct+'%');
+    const bar=document.getElementById('t-bat-bar');
+    bar.style.width=pct+'%';
+    bar.className='bat-bar '+(pct>30?'high':pct>15?'mid':'low');
+    // Color the value
+    const el=document.getElementById('t-bat-pct');
+    el.className='val'+(pct<=15?' crit':pct<=30?' warn':' ok');
+  } else {
+    setText('t-bat-pct','N/A');
+  }
+
+  // Attitude
+  const a=t.attitude||{};
+  setText('t-roll',(a.roll||0).toFixed(1)+'\u00b0');
+  setText('t-pitch',(a.pitch||0).toFixed(1)+'\u00b0');
+  setText('t-yaw',(a.yaw||0).toFixed(1)+'\u00b0');
 }
 
-// --- POST helpers ---
-function postAction(svc, path) {
-    const host = location.hostname || 'localhost';
-    fetch(`http://${host}:${ports[svc]}/${path}`, {method:'POST'})
-        .then(r => r.json())
-        .then(d => { document.getElementById(`${svc}-result`).textContent = JSON.stringify(d,null,2); })
-        .catch(e => { document.getElementById(`${svc}-result`).textContent = 'Error: ' + e; });
+function setText(id,v){const el=document.getElementById(id);if(el)el.textContent=v;}
+
+// --- Streams ---
+function startStream(){document.getElementById('mjpeg-stream').src=`http://${host}:${ports.cap}/stream`;}
+function startDetStream(){document.getElementById('det-stream').src=`http://${host}:${ports.det}/stream`;}
+
+// --- POST helper ---
+function postAction(svc,path){
+  const el=document.getElementById('cap-result');
+  el.style.display='block';
+  fetch(`http://${host}:${ports[svc]}/${path}`,{method:'POST'})
+    .then(r=>r.json()).then(d=>{el.textContent=JSON.stringify(d,null,2);})
+    .catch(e=>{el.textContent='Error: '+e;});
 }
 
 // --- LoRa send ---
-function loraSend() {
-    const text = document.getElementById('lora-text').value;
-    const host = location.hostname || 'localhost';
-    fetch(`http://${host}:${ports.lora}/send`, {
-        method: 'POST',
-        headers: {'Content-Type':'application/json'},
-        body: JSON.stringify({text})
-    })
-    .then(r => r.json())
-    .then(d => { document.getElementById('lora-result').textContent = JSON.stringify(d,null,2); })
-    .catch(e => { document.getElementById('lora-result').textContent = 'Error: ' + e; });
+function loraSend(){
+  const text=document.getElementById('lora-text').value;
+  if(!text) return;
+  fetch(`http://${host}:${ports.lora}/send`,{
+    method:'POST',headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({text})
+  }).then(r=>r.json()).then(d=>{
+    document.getElementById('lora-result').textContent=JSON.stringify(d,null,2);
+    document.getElementById('lora-text').value='';
+  }).catch(e=>{document.getElementById('lora-result').textContent='Error: '+e;});
 }
 </script>
 </body>

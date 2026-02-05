@@ -68,6 +68,10 @@ lora:
   baudrate: 115200
   # Port for LoRa REST / WebSocket API
   port: 8004
+  # Forward MAVLink telemetry to ESP32 via serial (TEL: messages)
+  telemetry_forward: true
+  # Interval in seconds between telemetry pushes
+  telemetry_interval: 2.0
 
 # ---------------------------------------------------------------------------
 # Web server (main UI entry point)
