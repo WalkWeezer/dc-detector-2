@@ -1,0 +1,103 @@
+# DC-Detector v0.2 — Configuration
+# Copy this file to config.yaml and adjust for your environment.
+
+# ---------------------------------------------------------------------------
+# Video capture
+# ---------------------------------------------------------------------------
+capture:
+  # Source: "auto" (CSI → USB fallback), "csi", "usb", "file"
+  source: "auto"
+  # Path to video file (used when source: "file" or playback mode)
+  video_file: ""
+  # Camera device index (0 = first camera)
+  device_index: 0
+  # Capture resolution & FPS
+  width: 640
+  height: 640
+  fps: 30
+  # Port for the MJPEG / API server
+  port: 8001
+  # Recording settings
+  recording:
+    enabled: true
+    directory: "./data/recordings"
+    # Codec: "MJPG" (most compatible) or "XVID"
+    codec: "MJPG"
+
+# ---------------------------------------------------------------------------
+# Object detection
+# ---------------------------------------------------------------------------
+detection:
+  # YOLO model path (.pt or .onnx)
+  model_path: "./models/yolov8n.pt"
+  # Confidence threshold
+  confidence: 0.5
+  # URL of the capture MJPEG stream (filled automatically by launcher)
+  stream_url: "http://localhost:8001/stream"
+  # Port for detection API
+  port: 8002
+  # Where to store detection results (CSV/JSON, JPEG, GIF)
+  results_dir: "./data/detections"
+  # GIF duration in seconds
+  gif_duration: 5
+  # Results file format: "json" or "csv"
+  results_format: "json"
+  # Tracker: "bytetrack" or "botsort"
+  tracker: "bytetrack"
+
+# ---------------------------------------------------------------------------
+# MAVLink (flight controller over UART)
+# ---------------------------------------------------------------------------
+mavlink:
+  enabled: true
+  # Device: /dev/ttyAMA0 on Pi, COM3 on Windows, etc.
+  device: "/dev/ttyAMA0"
+  baudrate: 57600
+  # Port for MAVLink REST / WebSocket API
+  port: 8003
+
+# ---------------------------------------------------------------------------
+# LoRa / ESP32 (UART)
+# ---------------------------------------------------------------------------
+lora:
+  enabled: true
+  # Device: /dev/ttyUSB0 on Pi, COM4 on Windows, etc.
+  device: "/dev/ttyUSB0"
+  baudrate: 115200
+  # Port for LoRa REST / WebSocket API
+  port: 8004
+
+# ---------------------------------------------------------------------------
+# Web server (main UI entry point)
+# ---------------------------------------------------------------------------
+web:
+  port: 8080
+
+# ---------------------------------------------------------------------------
+# Servo / Gimbal (PWM GPIO pins — Raspberry Pi only)
+# ---------------------------------------------------------------------------
+servo:
+  servo1_pin: 18    # GPIO18 — Pin 12
+  servo2_pin: 12    # GPIO12 — Pin 32
+  min_angle: 0
+  max_angle: 180
+
+# ---------------------------------------------------------------------------
+# Wi-Fi Access Point (Raspberry Pi only, used by setup_ap.sh)
+# ---------------------------------------------------------------------------
+ap:
+  ssid: "DC-Detector"
+  password: "dcdetector"
+  channel: 6
+  ip: "192.168.4.1"
+
+# ---------------------------------------------------------------------------
+# Logging
+# ---------------------------------------------------------------------------
+logging:
+  level: "INFO"
+  directory: "./logs"
+  # Max size per log file in bytes (10 MB)
+  max_bytes: 10485760
+  # Number of rotated backups to keep
+  backup_count: 5

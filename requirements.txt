@@ -1,0 +1,29 @@
+# DC-Detector v0.2 — Python 3.10+
+# Core web framework
+fastapi==0.115.6
+uvicorn[standard]==0.34.0
+aiofiles==24.1.0
+python-multipart==0.0.20
+websockets==14.1
+
+# Video & image processing
+opencv-python-headless==4.10.0.84
+numpy>=1.26,<2.0
+Pillow>=10.4,<11.0
+imageio>=2.36,<3.0
+imageio-ffmpeg>=0.5.1
+
+# YOLO detection (install separately if needed on constrained devices)
+ultralytics>=8.3,<9.0
+
+# MAVLink
+pymavlink>=2.4.41
+
+# Serial / UART
+pyserial>=3.5,<4.0
+
+# Config
+pyyaml>=6.0,<7.0
+
+# Async HTTP client (for inter-service calls)
+httpx>=0.28,<1.0

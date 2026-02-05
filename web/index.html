@@ -1,0 +1,216 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>DC-Detector v0.2 — Панель управления</title>
+</head>
+<body>
+<h1>DC-Detector v0.2</h1>
+<p>Панель управления системой детекции. Все эндпоинты и WebSocket-подключения перечислены ниже.</p>
+<hr>
+
+<!-- ================================================================== -->
+<h2>1. Захват видео (Capture) — порт <span id="cap-port">8001</span></h2>
+
+<h3>REST API</h3>
+<table border="1" cellpadding="4">
+<tr><th>Метод</th><th>URL</th><th>Описание</th></tr>
+<tr><td>GET</td><td><a id="link-stream" href="http://localhost:8001/stream" target="_blank">/stream</a></td><td>MJPEG-поток (можно вставить в &lt;img&gt;)</td></tr>
+<tr><td>GET</td><td><a id="link-frame" href="http://localhost:8001/frame" target="_blank">/frame</a></td><td>Один JPEG-кадр</td></tr>
+<tr><td>POST</td><td>/recording/start</td><td>Начать запись</td></tr>
+<tr><td>POST</td><td>/recording/stop</td><td>Остановить запись</td></tr>
+<tr><td>GET</td><td><a id="link-recs" href="http://localhost:8001/recordings" target="_blank">/recordings</a></td><td>Список записанных файлов</td></tr>
+<tr><td>GET</td><td>/recordings/{name}</td><td>Скачать файл записи</td></tr>
+<tr><td>POST</td><td>/playback</td><td>Воспроизвести запись <code>{"filename":"..."}</code></td></tr>
+<tr><td>POST</td><td>/playback/stop</td><td>Вернуться к камере</td></tr>
+</table>
+
+<h3>WebSocket</h3>
+<p>Подключение: <code id="ws-cap-url">ws://localhost:8001/ws</code></p>
+<button onclick="connectWS('cap')">Подключить</button>
+<button onclick="disconnectWS('cap')">Отключить</button>
+<pre id="ws-cap-log" style="max-height:150px;overflow:auto;border:1px solid #ccc;padding:4px;"></pre>
+
+<h3>Видеопоток (MJPEG)</h3>
+<img id="mjpeg-stream" width="320" height="320" alt="MJPEG stream">
+<br><button onclick="startStream()">Показать поток</button>
+
+<h3>Управление записью</h3>
+<button onclick="postAction('cap','recording/start')">Начать запись</button>
+<button onclick="postAction('cap','recording/stop')">Остановить</button>
+<pre id="cap-result" style="border:1px solid #ccc;padding:4px;"></pre>
+
+<hr>
+
+<!-- ================================================================== -->
+<h2>2. Детекция (Detection) — порт <span id="det-port">8002</span></h2>
+
+<h3>REST API</h3>
+<table border="1" cellpadding="4">
+<tr><th>Метод</th><th>URL</th><th>Описание</th></tr>
+<tr><td>GET</td><td><a id="link-tracks" href="http://localhost:8002/tracks" target="_blank">/tracks</a></td><td>Текущие активные треки</td></tr>
+<tr><td>GET</td><td><a id="link-dets" href="http://localhost:8002/detections" target="_blank">/detections</a></td><td>Все детекции текущей сессии</td></tr>
+<tr><td>GET</td><td>/media/{path}</td><td>JPEG / GIF детекции</td></tr>
+<tr><td>GET</td><td><a id="link-det-stream" href="http://localhost:8002/stream" target="_blank">/stream</a></td><td>Аннотированный MJPEG-поток (с рамками)</td></tr>
+</table>
+
+<h3>WebSocket</h3>
+<p>Подключение: <code id="ws-det-url">ws://localhost:8002/ws</code></p>
+<button onclick="connectWS('det')">Подключить</button>
+<button onclick="disconnectWS('det')">Отключить</button>
+<pre id="ws-det-log" style="max-height:150px;overflow:auto;border:1px solid #ccc;padding:4px;"></pre>
+
+<h3>Аннотированный поток</h3>
+<img id="det-stream" width="320" height="320" alt="Detection stream">
+<br><button onclick="startDetStream()">Показать поток детекции</button>
+
+<hr>
+
+<!-- ================================================================== -->
+<h2>3. MAVLink (Flight Controller) — порт <span id="mav-port">8003</span></h2>
+
+<h3>REST API</h3>
+<table border="1" cellpadding="4">
+<tr><th>Метод</th><th>URL</th><th>Описание</th></tr>
+<tr><td>GET</td><td><a id="link-telem" href="http://localhost:8003/telemetry" target="_blank">/telemetry</a></td><td>Последний снимок телеметрии</td></tr>
+<tr><td>GET</td><td><a id="link-mav-status" href="http://localhost:8003/status" target="_blank">/status</a></td><td>Статус подключения</td></tr>
+<tr><td>GET</td><td><a id="link-mav-msgs" href="http://localhost:8003/messages" target="_blank">/messages</a></td><td>Последние MAVLink-сообщения</td></tr>
+<tr><td>POST</td><td>/command</td><td>Отправить команду <code>{"msg_type":"...","params":{...}}</code></td></tr>
+</table>
+
+<h3>WebSocket</h3>
+<p>Подключение: <code id="ws-mav-url">ws://localhost:8003/ws</code></p>
+<button onclick="connectWS('mav')">Подключить</button>
+<button onclick="disconnectWS('mav')">Отключить</button>
+<pre id="ws-mav-log" style="max-height:150px;overflow:auto;border:1px solid #ccc;padding:4px;"></pre>
+
+<hr>
+
+<!-- ================================================================== -->
+<h2>4. LoRa / ESP32 — порт <span id="lora-port">8004</span></h2>
+
+<h3>REST API</h3>
+<table border="1" cellpadding="4">
+<tr><th>Метод</th><th>URL</th><th>Описание</th></tr>
+<tr><td>GET</td><td><a id="link-lora-status" href="http://localhost:8004/status" target="_blank">/status</a></td><td>Статус подключения</td></tr>
+<tr><td>GET</td><td><a id="link-lora-msgs" href="http://localhost:8004/messages" target="_blank">/messages</a></td><td>Принятые сообщения</td></tr>
+<tr><td>POST</td><td>/send</td><td>Отправить сообщение <code>{"text":"..."}</code></td></tr>
+</table>
+
+<h3>WebSocket</h3>
+<p>Подключение: <code id="ws-lora-url">ws://localhost:8004/ws</code></p>
+<button onclick="connectWS('lora')">Подключить</button>
+<button onclick="disconnectWS('lora')">Отключить</button>
+<pre id="ws-lora-log" style="max-height:150px;overflow:auto;border:1px solid #ccc;padding:4px;"></pre>
+
+<h3>Отправка сообщения</h3>
+<input id="lora-text" type="text" placeholder="Текст сообщения" size="40">
+<button onclick="loraSend()">Отправить</button>
+<pre id="lora-result" style="border:1px solid #ccc;padding:4px;"></pre>
+
+<hr>
+
+<!-- ================================================================== -->
+<h2>5. Конфигурация портов</h2>
+<p>Все порты настраиваются в <code>config.yaml</code>. Текущие значения загружены из
+<a href="/api/services" target="_blank">/api/services</a>.</p>
+
+<hr>
+<p><small>DC-Detector v0.2 &mdash; Raspberry Pi 5</small></p>
+
+<!-- ================================================================== -->
+<script>
+// --- Port configuration (loaded dynamically) ---
+const ports = {cap: 8001, det: 8002, mav: 8003, lora: 8004};
+const sockets = {};
+
+fetch('/api/services').then(r => r.json()).then(data => {
+    ports.cap  = data.capture.port;
+    ports.det  = data.detection.port;
+    ports.mav  = data.mavlink.port;
+    ports.lora = data.lora.port;
+    document.getElementById('cap-port').textContent  = ports.cap;
+    document.getElementById('det-port').textContent  = ports.det;
+    document.getElementById('mav-port').textContent  = ports.mav;
+    document.getElementById('lora-port').textContent = ports.lora;
+    // Update links
+    const host = location.hostname;
+    document.getElementById('link-stream').href      = `http://${host}:${ports.cap}/stream`;
+    document.getElementById('link-frame').href       = `http://${host}:${ports.cap}/frame`;
+    document.getElementById('link-recs').href        = `http://${host}:${ports.cap}/recordings`;
+    document.getElementById('link-tracks').href      = `http://${host}:${ports.det}/tracks`;
+    document.getElementById('link-dets').href        = `http://${host}:${ports.det}/detections`;
+    document.getElementById('link-det-stream').href  = `http://${host}:${ports.det}/stream`;
+    document.getElementById('link-telem').href       = `http://${host}:${ports.mav}/telemetry`;
+    document.getElementById('link-mav-status').href  = `http://${host}:${ports.mav}/status`;
+    document.getElementById('link-mav-msgs').href    = `http://${host}:${ports.mav}/messages`;
+    document.getElementById('link-lora-status').href = `http://${host}:${ports.lora}/status`;
+    document.getElementById('link-lora-msgs').href   = `http://${host}:${ports.lora}/messages`;
+    // WS URLs
+    document.getElementById('ws-cap-url').textContent  = `ws://${host}:${ports.cap}/ws`;
+    document.getElementById('ws-det-url').textContent  = `ws://${host}:${ports.det}/ws`;
+    document.getElementById('ws-mav-url').textContent  = `ws://${host}:${ports.mav}/ws`;
+    document.getElementById('ws-lora-url').textContent = `ws://${host}:${ports.lora}/ws`;
+}).catch(() => {});
+
+// --- WebSocket helpers ---
+function wsUrl(svc) {
+    const host = location.hostname || 'localhost';
+    return `ws://${host}:${ports[svc]}/ws`;
+}
+
+function connectWS(svc) {
+    if (sockets[svc]) sockets[svc].close();
+    const url = wsUrl(svc);
+    const ws = new WebSocket(url);
+    const logEl = document.getElementById(`ws-${svc}-log`);
+    ws.onopen = () => { logEl.textContent += '[connected]\n'; };
+    ws.onmessage = (e) => {
+        logEl.textContent += e.data.substring(0, 300) + '\n';
+        logEl.scrollTop = logEl.scrollHeight;
+    };
+    ws.onclose = () => { logEl.textContent += '[disconnected]\n'; };
+    ws.onerror = () => { logEl.textContent += '[error]\n'; };
+    sockets[svc] = ws;
+}
+
+function disconnectWS(svc) {
+    if (sockets[svc]) { sockets[svc].close(); sockets[svc] = null; }
+}
+
+// --- MJPEG stream ---
+function startStream() {
+    const host = location.hostname || 'localhost';
+    document.getElementById('mjpeg-stream').src = `http://${host}:${ports.cap}/stream`;
+}
+function startDetStream() {
+    const host = location.hostname || 'localhost';
+    document.getElementById('det-stream').src = `http://${host}:${ports.det}/stream`;
+}
+
+// --- POST helpers ---
+function postAction(svc, path) {
+    const host = location.hostname || 'localhost';
+    fetch(`http://${host}:${ports[svc]}/${path}`, {method:'POST'})
+        .then(r => r.json())
+        .then(d => { document.getElementById(`${svc}-result`).textContent = JSON.stringify(d,null,2); })
+        .catch(e => { document.getElementById(`${svc}-result`).textContent = 'Error: ' + e; });
+}
+
+// --- LoRa send ---
+function loraSend() {
+    const text = document.getElementById('lora-text').value;
+    const host = location.hostname || 'localhost';
+    fetch(`http://${host}:${ports.lora}/send`, {
+        method: 'POST',
+        headers: {'Content-Type':'application/json'},
+        body: JSON.stringify({text})
+    })
+    .then(r => r.json())
+    .then(d => { document.getElementById('lora-result').textContent = JSON.stringify(d,null,2); })
+    .catch(e => { document.getElementById('lora-result').textContent = 'Error: ' + e; });
+}
+</script>
+</body>
+</html>
