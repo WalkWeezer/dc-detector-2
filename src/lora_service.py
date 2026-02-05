@@ -14,6 +14,7 @@ import os
 import sys
 import threading
 import time
+from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.responses import JSONResponse
@@ -31,7 +32,23 @@ BAUDRATE = int(lora_cfg.get("baudrate", 115200))
 PORT = int(lora_cfg.get("port", 8004))
 
 log = setup_logging("lora", cfg)
-app = FastAPI(title="DC-Detector LoRa")
+
+
+# ---------------------------------------------------------------------------
+# Lifespan & App
+# ---------------------------------------------------------------------------
+
+@asynccontextmanager
+async def lifespan(application: FastAPI):
+    if ENABLED:
+        threading.Thread(target=_serial_loop, daemon=True).start()
+        log.info("LoRa service started on port %d (device=%s)", PORT, DEVICE)
+    else:
+        log.info("LoRa service disabled in config")
+    yield
+
+app = FastAPI(title="DC-Detector LoRa", lifespan=lifespan)
+
 
 # ---------------------------------------------------------------------------
 # State
@@ -175,19 +192,6 @@ async def ws_endpoint(ws: WebSocket):
     finally:
         if ws in _ws_clients:
             _ws_clients.remove(ws)
-
-
-# ---------------------------------------------------------------------------
-# Startup
-# ---------------------------------------------------------------------------
-
-@app.on_event("startup")
-async def on_startup():
-    if ENABLED:
-        threading.Thread(target=_serial_loop, daemon=True).start()
-        log.info("LoRa service started on port %d (device=%s)", PORT, DEVICE)
-    else:
-        log.info("LoRa service disabled in config")
 
 
 if __name__ == "__main__":

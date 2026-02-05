@@ -19,6 +19,7 @@ import os
 import sys
 import threading
 import time
+from contextlib import asynccontextmanager
 
 import cv2
 import numpy as np
@@ -48,8 +49,6 @@ REC_CODEC = cap_cfg.get("recording", {}).get("codec", "MJPG")
 
 log = setup_logging("capture", cfg)
 
-app = FastAPI(title="DC-Detector Capture")
-
 # ---------------------------------------------------------------------------
 # Shared state
 # ---------------------------------------------------------------------------
@@ -67,15 +66,17 @@ _ws_clients: list[WebSocket] = []
 # Camera helpers
 # ---------------------------------------------------------------------------
 
-def _open_source(source: str, video_file: str, device_index: int) -> cv2.VideoCapture:
-    """Open the video source based on config."""
+def _open_source(source: str, video_file: str, device_index: int) -> cv2.VideoCapture | None:
+    """Open the video source based on config.  Returns None if nothing works."""
     if source == "file":
         if not video_file or not os.path.isfile(video_file):
             log.error("Video file not found: %s", video_file)
-            raise FileNotFoundError(video_file)
+            return None
         cap = cv2.VideoCapture(video_file)
-        log.info("Opened video file: %s", video_file)
-        return cap
+        if cap.isOpened():
+            log.info("Opened video file: %s", video_file)
+            return cap
+        return None
 
     if source in ("csi", "auto"):
         # Try CSI / libcamera (Raspberry Pi)
@@ -93,13 +94,27 @@ def _open_source(source: str, video_file: str, device_index: int) -> cv2.VideoCa
             log.info("Opened USB camera index %d", device_index)
             return cap
 
-    raise RuntimeError("No camera source available")
+    return None
 
 
 def _apply_props(cap: cv2.VideoCapture) -> None:
     cap.set(cv2.CAP_PROP_FRAME_WIDTH, WIDTH)
     cap.set(cv2.CAP_PROP_FRAME_HEIGHT, HEIGHT)
     cap.set(cv2.CAP_PROP_FPS, FPS)
+
+
+def _no_signal_frame() -> np.ndarray:
+    """Generate a 'No Signal' placeholder frame."""
+    frame = np.zeros((HEIGHT, WIDTH, 3), dtype=np.uint8)
+    text = "NO SIGNAL"
+    font = cv2.FONT_HERSHEY_SIMPLEX
+    scale = WIDTH / 400
+    thickness = max(1, int(scale * 2))
+    (tw, th), _ = cv2.getTextSize(text, font, scale, thickness)
+    x = (WIDTH - tw) // 2
+    y = (HEIGHT + th) // 2
+    cv2.putText(frame, text, (x, y), font, scale, (0, 0, 255), thickness)
+    return frame
 
 
 # ---------------------------------------------------------------------------
@@ -109,7 +124,18 @@ def _apply_props(cap: cv2.VideoCapture) -> None:
 def _capture_loop() -> None:
     global _latest_frame, _cap, _recording, _video_writer, _playback_mode
 
-    cap_local = _open_source(SRC, VIDEO_FILE, DEVICE_INDEX)
+    RETRY_INTERVAL = 5  # seconds between reconnection attempts
+
+    # --- Initial connection (with retries) ---
+    cap_local: cv2.VideoCapture | None = None
+    while cap_local is None:
+        cap_local = _open_source(SRC, VIDEO_FILE, DEVICE_INDEX)
+        if cap_local is None:
+            log.warning("No camera source available — showing 'No Signal', retrying in %d s", RETRY_INTERVAL)
+            with _lock:
+                _latest_frame = _no_signal_frame()
+            time.sleep(RETRY_INTERVAL)
+
     _apply_props(cap_local)
     with _lock:
         _cap = cap_local
@@ -125,14 +151,29 @@ def _capture_loop() -> None:
             if _cap is not cap_local:
                 cap_local = _cap
 
+        if cap_local is None:
+            with _lock:
+                _latest_frame = _no_signal_frame()
+            time.sleep(RETRY_INTERVAL)
+            # Try to reconnect
+            cap_local = _open_source(SRC, VIDEO_FILE, DEVICE_INDEX)
+            if cap_local is not None:
+                _apply_props(cap_local)
+                with _lock:
+                    _cap = cap_local
+                log.info("Camera reconnected")
+            continue
+
         ok, frame = cap_local.read()
         if not ok:
             if _playback_mode or SRC == "file":
                 # Loop file
                 cap_local.set(cv2.CAP_PROP_POS_FRAMES, 0)
                 continue
-            log.warning("Frame grab failed, retrying in 1 s")
-            time.sleep(1)
+            log.warning("Frame grab failed, retrying in %d s", RETRY_INTERVAL)
+            with _lock:
+                _latest_frame = _no_signal_frame()
+            time.sleep(RETRY_INTERVAL)
             continue
 
         # Resize to configured resolution
@@ -195,6 +236,22 @@ async def _mjpeg_generator():
             b"Content-Type: image/jpeg\r\n\r\n" + jpeg.tobytes() + b"\r\n"
         )
         await asyncio.sleep(1.0 / max(FPS, 1))
+
+
+# ---------------------------------------------------------------------------
+# Lifespan
+# ---------------------------------------------------------------------------
+
+@asynccontextmanager
+async def lifespan(application: FastAPI):
+    os.makedirs(REC_DIR, exist_ok=True)
+    t = threading.Thread(target=_capture_loop, daemon=True)
+    t.start()
+    log.info("Capture service started on port %d  (source=%s, %dx%d@%dfps)",
+             PORT, SRC, WIDTH, HEIGHT, FPS)
+    yield
+
+app = FastAPI(title="DC-Detector Capture", lifespan=lifespan)
 
 
 # ---------------------------------------------------------------------------
@@ -297,7 +354,8 @@ async def stop_playback():
         if _cap is not None:
             _cap.release()
         _cap = _open_source(SRC, VIDEO_FILE, DEVICE_INDEX)
-        _apply_props(_cap)
+        if _cap is not None:
+            _apply_props(_cap)
     log.info("Playback stopped, live source restored")
     return JSONResponse({"status": "live"})
 
@@ -338,19 +396,6 @@ async def ws_endpoint(ws: WebSocket):
     finally:
         if ws in _ws_clients:
             _ws_clients.remove(ws)
-
-
-# ---------------------------------------------------------------------------
-# Startup
-# ---------------------------------------------------------------------------
-
-@app.on_event("startup")
-async def on_startup():
-    os.makedirs(REC_DIR, exist_ok=True)
-    t = threading.Thread(target=_capture_loop, daemon=True)
-    t.start()
-    log.info("Capture service started on port %d  (source=%s, %dx%d@%dfps)",
-             PORT, SRC, WIDTH, HEIGHT, FPS)
 
 
 if __name__ == "__main__":

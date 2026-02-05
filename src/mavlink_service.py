@@ -14,6 +14,7 @@ import os
 import sys
 import threading
 import time
+from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.responses import JSONResponse
@@ -31,7 +32,23 @@ BAUDRATE = int(mav_cfg.get("baudrate", 57600))
 PORT = int(mav_cfg.get("port", 8003))
 
 log = setup_logging("mavlink", cfg)
-app = FastAPI(title="DC-Detector MAVLink")
+
+
+# ---------------------------------------------------------------------------
+# Lifespan & App
+# ---------------------------------------------------------------------------
+
+@asynccontextmanager
+async def lifespan(application: FastAPI):
+    if ENABLED:
+        threading.Thread(target=_mavlink_loop, daemon=True).start()
+        log.info("MAVLink service started on port %d (device=%s)", PORT, DEVICE)
+    else:
+        log.info("MAVLink service disabled in config")
+    yield
+
+app = FastAPI(title="DC-Detector MAVLink", lifespan=lifespan)
+
 
 # ---------------------------------------------------------------------------
 # State
@@ -165,19 +182,6 @@ async def ws_endpoint(ws: WebSocket):
     finally:
         if ws in _ws_clients:
             _ws_clients.remove(ws)
-
-
-# ---------------------------------------------------------------------------
-# Startup
-# ---------------------------------------------------------------------------
-
-@app.on_event("startup")
-async def on_startup():
-    if ENABLED:
-        threading.Thread(target=_mavlink_loop, daemon=True).start()
-        log.info("MAVLink service started on port %d (device=%s)", PORT, DEVICE)
-    else:
-        log.info("MAVLink service disabled in config")
 
 
 if __name__ == "__main__":

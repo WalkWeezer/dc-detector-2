@@ -18,6 +18,7 @@ import os
 import sys
 import threading
 import time
+from contextlib import asynccontextmanager
 from pathlib import Path
 
 import cv2
@@ -50,7 +51,24 @@ SRC_FPS = int(cap_cfg.get("fps", 30))
 
 log = setup_logging("detector", cfg)
 
-app = FastAPI(title="DC-Detector Detection")
+
+# ---------------------------------------------------------------------------
+# Lifespan & App
+# ---------------------------------------------------------------------------
+
+@asynccontextmanager
+async def lifespan(application: FastAPI):
+    os.makedirs(_session_dir, exist_ok=True)
+    threading.Thread(target=_detection_loop, daemon=True).start()
+    threading.Thread(target=_periodic_save, daemon=True).start()
+    log.info("Detection service started on port %d  (model=%s, tracker=%s)",
+             PORT, MODEL_PATH, TRACKER)
+    yield
+    _save_results()
+    log.info("Detection service shutting down, results saved")
+
+app = FastAPI(title="DC-Detector Detection", lifespan=lifespan)
+
 
 # ---------------------------------------------------------------------------
 # Session state
@@ -223,11 +241,17 @@ def _buffer_gif_frame(
     crop = _safe_crop(frame, x1, y1, x2, y2)
     # Convert BGR → RGB for imageio
     crop_rgb = cv2.cvtColor(crop, cv2.COLOR_BGR2RGB)
-    # Resize to max 200px wide for small GIF
-    h, w = crop_rgb.shape[:2]
-    if w > 200:
-        scale = 200 / w
-        crop_rgb = cv2.resize(crop_rgb, (200, int(h * scale)))
+
+    # Fix size to the first frame's dimensions so all GIF frames match
+    if buf["frames"]:
+        target_h, target_w = buf["frames"][0].shape[:2]
+        crop_rgb = cv2.resize(crop_rgb, (target_w, target_h))
+    else:
+        # First frame — cap width at 200 px
+        h, w = crop_rgb.shape[:2]
+        if w > 200:
+            scale = 200 / w
+            crop_rgb = cv2.resize(crop_rgb, (200, int(h * scale)))
     buf["frames"].append(crop_rgb)
 
     if now - buf["start"] >= GIF_DURATION and len(buf["frames"]) >= 5:
@@ -364,25 +388,6 @@ async def ws_endpoint(ws: WebSocket):
     finally:
         if ws in _ws_clients:
             _ws_clients.remove(ws)
-
-
-# ---------------------------------------------------------------------------
-# Startup / Shutdown
-# ---------------------------------------------------------------------------
-
-@app.on_event("startup")
-async def on_startup():
-    os.makedirs(_session_dir, exist_ok=True)
-    threading.Thread(target=_detection_loop, daemon=True).start()
-    threading.Thread(target=_periodic_save, daemon=True).start()
-    log.info("Detection service started on port %d  (model=%s, tracker=%s)",
-             PORT, MODEL_PATH, TRACKER)
-
-
-@app.on_event("shutdown")
-async def on_shutdown():
-    _save_results()
-    log.info("Detection service shutting down, results saved")
 
 
 if __name__ == "__main__":

@@ -15,6 +15,7 @@ imageio-ffmpeg>=0.5.1
 
 # YOLO detection (install separately if needed on constrained devices)
 ultralytics>=8.3,<9.0
+lap>=0.5.12
 
 # MAVLink
 pymavlink>=2.4.41

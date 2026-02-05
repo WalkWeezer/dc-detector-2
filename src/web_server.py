@@ -8,10 +8,10 @@ GET  /api/services  Status of all sub-services
 
 import os
 import sys
+from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 from fastapi.responses import FileResponse, JSONResponse
-from fastapi.staticfiles import StaticFiles
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from config import load_config, get_section, project_root  # noqa: E402
@@ -27,9 +27,15 @@ mav_port = int(get_section(cfg, "mavlink").get("port", 8003))
 lora_port = int(get_section(cfg, "lora").get("port", 8004))
 
 log = setup_logging("web", cfg)
-app = FastAPI(title="DC-Detector Web")
-
 WEB_DIR = os.path.join(project_root(), "web")
+
+
+@asynccontextmanager
+async def lifespan(application: FastAPI):
+    log.info("Web UI server started on port %d", PORT)
+    yield
+
+app = FastAPI(title="DC-Detector Web", lifespan=lifespan)
 
 
 @app.get("/")
@@ -45,11 +51,6 @@ async def services():
         "mavlink": {"port": mav_port, "base": f"http://localhost:{mav_port}"},
         "lora": {"port": lora_port, "base": f"http://localhost:{lora_port}"},
     })
-
-
-@app.on_event("startup")
-async def on_startup():
-    log.info("Web UI server started on port %d", PORT)
 
 
 if __name__ == "__main__":
