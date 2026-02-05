@@ -19,6 +19,8 @@ import threading
 import time
 from contextlib import asynccontextmanager
 
+os.environ.setdefault("MAVLINK20", "1")  # enable MAVLink 2 protocol
+
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
@@ -158,7 +160,9 @@ def _mavlink_loop() -> None:
     while conn is None:
         log.info("Connecting to MAVLink device %s @ %d baud", DEVICE, BAUDRATE)
         try:
-            conn = mavutil.mavlink_connection(DEVICE, baud=BAUDRATE)
+            conn = mavutil.mavlink_connection(DEVICE, baud=BAUDRATE, dialect="ardupilotmega")
+            conn.mav.srcSystem = 255
+            conn.mav.srcComponent = 0
         except Exception as exc:
             log.warning("Failed to open MAVLink device %s: %s — retrying in %d s", DEVICE, exc, RETRY)
             time.sleep(RETRY)
