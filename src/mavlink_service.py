@@ -167,13 +167,33 @@ def _mavlink_loop() -> None:
             log.warning("Failed to open MAVLink device %s: %s — retrying in %d s", DEVICE, exc, RETRY)
             time.sleep(RETRY)
 
+    log.info("Serial port opened, waiting for heartbeat...")
+    hb = conn.wait_heartbeat(timeout=30)
+    if hb is None:
+        log.warning("No heartbeat received within 30 s — will keep trying in recv loop")
+    else:
+        log.info("Heartbeat from system %d component %d (type %d)",
+                 conn.target_system, conn.target_component, hb.type)
+
     with _lock:
-        _connected = True
-    log.info("MAVLink connection established")
+        _connected = hb is not None
+    log.info("MAVLink connection %s", "established" if hb else "open (no heartbeat yet)")
+
+    last_heartbeat_ts = time.time() if hb else 0.0
+    HEARTBEAT_TIMEOUT = 10  # seconds without heartbeat → disconnected
 
     while True:
         try:
             msg = conn.recv_match(blocking=True, timeout=2)
+            now = time.time()
+
+            # Check heartbeat timeout
+            if last_heartbeat_ts and (now - last_heartbeat_ts > HEARTBEAT_TIMEOUT):
+                with _lock:
+                    if _connected:
+                        _connected = False
+                        log.warning("No heartbeat for %d s — marking disconnected", HEARTBEAT_TIMEOUT)
+
             if msg is None:
                 continue
 
@@ -181,9 +201,17 @@ def _mavlink_loop() -> None:
             if msg_type == "BAD_DATA":
                 continue
 
+            # Track heartbeat for connection status
+            if msg_type == "HEARTBEAT":
+                last_heartbeat_ts = now
+                with _lock:
+                    if not _connected:
+                        _connected = True
+                        log.info("Heartbeat restored — connected")
+
             data = msg.to_dict()
             data.pop("mavpackettype", None)
-            ts = time.time()
+            ts = now
 
             with _lock:
                 _telemetry[msg_type] = {"data": data, "ts": ts}
