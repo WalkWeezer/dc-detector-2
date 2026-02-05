@@ -74,12 +74,15 @@ def _mavlink_loop() -> None:
         log.error("pymavlink not installed — MAVLink service disabled")
         return
 
-    log.info("Connecting to MAVLink device %s @ %d baud", DEVICE, BAUDRATE)
-    try:
-        conn = mavutil.mavlink_connection(DEVICE, baud=BAUDRATE)
-    except Exception as exc:
-        log.error("Failed to open MAVLink device: %s", exc)
-        return
+    RETRY = 10
+    conn = None
+    while conn is None:
+        log.info("Connecting to MAVLink device %s @ %d baud", DEVICE, BAUDRATE)
+        try:
+            conn = mavutil.mavlink_connection(DEVICE, baud=BAUDRATE)
+        except Exception as exc:
+            log.warning("Failed to open MAVLink device %s: %s — retrying in %d s", DEVICE, exc, RETRY)
+            time.sleep(RETRY)
 
     with _lock:
         _connected = True

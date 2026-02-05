@@ -74,12 +74,15 @@ def _serial_loop() -> None:
         log.error("pyserial not installed — LoRa service disabled")
         return
 
-    log.info("Opening LoRa serial device %s @ %d baud", DEVICE, BAUDRATE)
-    try:
-        _serial_port = serial.Serial(DEVICE, BAUDRATE, timeout=1)
-    except Exception as exc:
-        log.error("Failed to open serial device: %s", exc)
-        return
+    RETRY = 10  # seconds between retries
+    while True:
+        log.info("Opening LoRa serial device %s @ %d baud", DEVICE, BAUDRATE)
+        try:
+            _serial_port = serial.Serial(DEVICE, BAUDRATE, timeout=1)
+            break
+        except Exception as exc:
+            log.warning("Failed to open serial device %s: %s — retrying in %d s", DEVICE, exc, RETRY)
+            time.sleep(RETRY)
 
     with _lock:
         _connected = True

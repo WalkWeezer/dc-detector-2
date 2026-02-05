@@ -1,7 +1,9 @@
 {
   "permissions": {
     "allow": [
-      "Bash(dir /s \"c:\\\\Users\\\\borov\\\\source\\\\projects\\\\DC-Detector-v0.2\")"
+      "Bash(dir /s \"c:\\\\Users\\\\borov\\\\source\\\\projects\\\\DC-Detector-v0.2\")",
+      "Bash(findstr:*)",
+      "Bash(del \"\\\\?\\\\c:\\\\Users\\\\borov\\\\source\\\\projects\\\\DC-Detector-v0.2\\\\nul\")"
     ]
   }
 }
