@@ -1,0 +1,17 @@
+[Unit]
+Description=DC-Detector v0.2
+After=network.target
+
+[Service]
+Type=simple
+User=pi
+WorkingDirectory=/home/pi/DC-Detector-v0.2
+ExecStart=/home/pi/DC-Detector-v0.2/venv/bin/python src/launcher.py
+Environment=PYTHONPATH=/home/pi/DC-Detector-v0.2/src
+Restart=on-failure
+RestartSec=5
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target
