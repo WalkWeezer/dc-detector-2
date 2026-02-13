@@ -295,6 +295,7 @@ button.full-w { width: 100%; }
 .modal-backdrop { position: absolute; inset: 0; background: rgba(0,0,0,0.55); backdrop-filter: blur(3px); }
 .modal-dialog { position: absolute; inset: 0; display: grid; place-items: center; padding: 24px; }
 .modal-body {
+  position: relative;
   width: min(1000px, 95vw); max-height: 85vh;
   background: rgba(5,7,16,0.95); border: 1px solid rgba(126,229,255,0.2);
   border-radius: 16px; padding: 20px;
@@ -314,8 +315,8 @@ button.full-w { width: 100%; }
 .modal-meta dt { color: #8899aa; }
 .modal-meta dd { margin: 0; color: #e2e8f0; }
 .modal-close {
-  position: absolute; top: 16px; right: 24px; width: 36px; height: 36px;
-  border-radius: 50%; border: none; font-size: 1.3rem;
+  position: absolute; top: 8px; right: 8px; width: 36px; height: 36px;
+  border-radius: 50%; border: none; font-size: 1.3rem; z-index: 1;
   background: rgba(255,255,255,0.1); color: #f8fafc; cursor: pointer;
 }
 

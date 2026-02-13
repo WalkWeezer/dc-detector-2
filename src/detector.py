@@ -93,7 +93,7 @@ _session_dir = os.path.join(RESULTS_DIR, f"session_{_session_id}")
 
 _lock = threading.Lock()
 _active_tracks: dict[int, dict] = {}
-_all_detections: list[dict] = []
+_track_detections: dict[int, dict] = {}   # track_id → best detection (highest confidence)
 _annotated_frame: np.ndarray | None = None
 _frame_number = 0
 _ws_clients: list[WebSocket] = []
@@ -280,9 +280,14 @@ def _detection_loop() -> None:
             _active_tracks.update(current_tracks)
             _annotated_frame = annotated
 
+            # Keep best (highest confidence) detection per track_id
             for t in current_tracks.values():
-                if t["confidence"] >= _runtime_save_conf:
-                    _all_detections.append(t)
+                tid = t.get("track_id", -1)
+                if tid < 0 or t["confidence"] < _runtime_save_conf:
+                    continue
+                existing = _track_detections.get(tid)
+                if existing is None or t["confidence"] > existing["confidence"]:
+                    _track_detections[tid] = t
 
         # Throttle to avoid overload
         time.sleep(0.001)
@@ -351,7 +356,7 @@ def _buffer_gif_frame(
 
 def _save_results() -> None:
     with _lock:
-        detections = list(_all_detections)
+        detections = sorted(_track_detections.values(), key=lambda d: d.get("track_id", 0))
 
     if not detections:
         return
@@ -410,7 +415,7 @@ def _calc_metrics() -> dict:
         "last_inference_ms": round(last_ms, 1),
         "frame_number": _frame_number,
         "active_tracks": len(_active_tracks),
-        "total_detections": len(_all_detections),
+        "total_detections": len(_track_detections),
         "session_id": _session_id,
     }
 
@@ -428,10 +433,11 @@ async def get_tracks():
 @app.get("/detections")
 async def get_detections():
     with _lock:
+        dets = sorted(_track_detections.values(), key=lambda d: d.get("track_id", 0))
         return JSONResponse({
             "session_id": _session_id,
-            "total": len(_all_detections),
-            "detections": _all_detections[-200:],  # last 200
+            "total": len(dets),
+            "detections": dets,
         })
 
 

@@ -37,7 +37,7 @@ STANDARD_MODELS = [
 ]
 
 # ---------------------------------------------------------------------------
-# Specialized models from GitHub (pre-trained .pt files)
+# Specialized models from GitHub (pre-trained .pt fi
 # ---------------------------------------------------------------------------
 SPECIAL_MODELS = [
     {
