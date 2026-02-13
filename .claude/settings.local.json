@@ -5,7 +5,13 @@
       "Bash(findstr:*)",
       "Bash(del \"\\\\?\\\\c:\\\\Users\\\\borov\\\\source\\\\projects\\\\DC-Detector-v0.2\\\\nul\")",
       "Bash(git status:*)",
-      "Bash(git commit -m \"$\\(cat <<''EOF''\nFix launch.bat: prevent ''nul'' file creation when run from PowerShell\n\nReplace >nul with 1>NUL 2>NUL to avoid creating a file named ''nul''\nwhich blocks git operations on Windows.\n\nCo-Authored-By: Claude Opus 4.5 <noreply@anthropic.com>\nEOF\n\\)\")"
+      "Bash(git commit -m \"$\\(cat <<''EOF''\nFix launch.bat: prevent ''nul'' file creation when run from PowerShell\n\nReplace >nul with 1>NUL 2>NUL to avoid creating a file named ''nul''\nwhich blocks git operations on Windows.\n\nCo-Authored-By: Claude Opus 4.5 <noreply@anthropic.com>\nEOF\n\\)\")",
+      "Bash(netstat:*)",
+      "Bash(taskkill:*)",
+      "Bash(cmd /c \"taskkill /F /PID 31540 & taskkill /F /PID 34584 & taskkill /F /PID 31676 & taskkill /F /PID 34732 & taskkill /F /PID 32852\")",
+      "Bash(ls \"c:\\\\Users\\\\borov\\\\source\\\\projects\\\\DC-Detector-v0.2\\\\models\"\" 2>nul || echo \"Directory does not exist or is empty \")",
+      "Bash(pio run:*)",
+      "Bash(platformio run:*)"
     ]
   }
 }

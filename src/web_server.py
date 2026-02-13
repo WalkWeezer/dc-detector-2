@@ -12,6 +12,7 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 from fastapi.responses import FileResponse, JSONResponse
+from fastapi.staticfiles import StaticFiles
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from config import load_config, get_section, project_root  # noqa: E402
@@ -51,6 +52,10 @@ async def services():
         "mavlink": {"port": mav_port, "base": f"http://localhost:{mav_port}"},
         "lora": {"port": lora_port, "base": f"http://localhost:{lora_port}"},
     })
+
+
+# Serve static files (CSS, JS) from web directory — must be after explicit routes
+app.mount("/", StaticFiles(directory=WEB_DIR), name="static")
 
 
 if __name__ == "__main__":

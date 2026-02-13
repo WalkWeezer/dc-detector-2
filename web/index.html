@@ -1,376 +1,249 @@
 <!DOCTYPE html>
 <html lang="ru">
 <head>
-<meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>DC-Detector v0.2</title>
-<style>
-*{box-sizing:border-box;margin:0;padding:0}
-body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;background:#0f1117;color:#e0e0e0;padding:12px}
-h1{font-size:1.3rem;color:#fff;margin-bottom:8px}
-h2{font-size:1.1rem;color:#a0b0ff;margin:16px 0 8px;border-bottom:1px solid #2a2d3a;padding-bottom:4px}
-h3{font-size:.9rem;color:#8090c0;margin:10px 0 4px}
-
-/* Grid layout for telemetry */
-.tgrid{display:grid;grid-template-columns:repeat(auto-fit,minmax(250px,1fr));gap:10px;margin:8px 0}
-.tcard{background:#1a1d28;border:1px solid #2a2d3a;border-radius:8px;padding:10px}
-.tcard h3{margin:0 0 6px;font-size:.85rem;color:#7090d0;text-transform:uppercase;letter-spacing:.5px}
-.tcard .row{display:flex;justify-content:space-between;padding:2px 0;font-size:.85rem}
-.tcard .lbl{color:#8899aa}
-.tcard .val{color:#fff;font-weight:600;font-variant-numeric:tabular-nums}
-.tcard .val.warn{color:#ffa040}
-.tcard .val.crit{color:#ff4040}
-.tcard .val.ok{color:#40ff80}
-
-/* Status indicator */
-.status-dot{display:inline-block;width:8px;height:8px;border-radius:50%;margin-right:4px;background:#ff4040}
-.status-dot.on{background:#40ff80}
-
-/* Battery bar */
-.bat-bar-wrap{background:#2a2d3a;border-radius:3px;height:10px;margin-top:4px;overflow:hidden}
-.bat-bar{height:100%;border-radius:3px;transition:width .5s,background .5s}
-.bat-bar.high{background:#40ff80}
-.bat-bar.mid{background:#ffa040}
-.bat-bar.low{background:#ff4040}
-
-/* Mode badge */
-.mode-badge{display:inline-block;background:#2a3a5a;color:#80b0ff;border-radius:4px;padding:1px 8px;font-size:.8rem;font-weight:600}
-.armed-badge{background:#4a2020;color:#ff6060}
-.armed-badge.yes{background:#603010;color:#ff9040}
-
-/* Streams */
-.stream-row{display:flex;gap:10px;flex-wrap:wrap;margin:8px 0}
-.stream-box{background:#000;border:1px solid #2a2d3a;border-radius:6px;overflow:hidden;position:relative}
-.stream-box img{display:block;width:320px;height:320px;object-fit:contain;background:#111}
-.stream-label{position:absolute;top:4px;left:6px;background:rgba(0,0,0,.7);color:#fff;font-size:.7rem;padding:1px 6px;border-radius:3px}
-
-/* Buttons */
-button{background:#2a3a5a;color:#c0d0ff;border:1px solid #3a4a6a;border-radius:4px;padding:4px 12px;cursor:pointer;font-size:.8rem}
-button:hover{background:#3a4a6a}
-input[type=text]{background:#1a1d28;border:1px solid #2a2d3a;color:#e0e0e0;padding:4px 8px;border-radius:4px;font-size:.85rem}
-
-/* Tables */
-table{border-collapse:collapse;width:100%;font-size:.8rem;margin:4px 0}
-th{background:#1a1d28;color:#8090c0;padding:4px 8px;text-align:left;border-bottom:1px solid #2a2d3a}
-td{padding:3px 8px;border-bottom:1px solid #1a1d28}
-a{color:#6090e0}
-
-/* Log */
-details{margin:8px 0}
-summary{cursor:pointer;color:#7080a0;font-size:.8rem}
-pre.log{max-height:120px;overflow:auto;background:#0a0c12;border:1px solid #1a1d28;padding:4px;font-size:.75rem;color:#7080a0;border-radius:4px}
-
-/* Section */
-.section{margin-bottom:16px}
-.controls{display:flex;gap:6px;align-items:center;flex-wrap:wrap;margin:6px 0}
-.footer{text-align:center;color:#4a5060;font-size:.75rem;margin-top:20px;padding:8px;border-top:1px solid #1a1d28}
-</style>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>DC-Detector v0.2</title>
+  <link rel="stylesheet" href="./styles.css" />
 </head>
 <body>
+  <div class="page">
+    <main class="main-grid">
 
-<h1>DC-Detector v0.2</h1>
-<div style="font-size:.8rem;color:#5a6a80;margin-bottom:12px">
-  <span class="status-dot" id="mav-dot"></span> MAVLink
-  &nbsp;&nbsp;
-  <span class="status-dot" id="lora-dot"></span> LoRa
-  &nbsp;&nbsp;
-  <span id="last-update" style="color:#4a5a70">---</span>
-</div>
+      <!-- ====== Left: Video + Status Strip ====== -->
+      <div class="video-col">
+        <div class="video-wrapper">
+          <img id="stream" alt="Video stream" />
+          <canvas id="overlay"></canvas>
+        </div>
 
-<!-- ============================================================ -->
-<h2>Telemetry</h2>
-<div class="tgrid">
-  <!-- GPS -->
-  <div class="tcard">
-    <h3>GPS</h3>
-    <div class="row"><span class="lbl">Lat</span><span class="val" id="t-lat">---</span></div>
-    <div class="row"><span class="lbl">Lon</span><span class="val" id="t-lon">---</span></div>
-    <div class="row"><span class="lbl">Alt MSL</span><span class="val" id="t-alt-msl">---</span></div>
-    <div class="row"><span class="lbl">Alt REL</span><span class="val" id="t-alt-rel">---</span></div>
-    <div class="row"><span class="lbl">Fix</span><span class="val" id="t-fix">---</span></div>
-    <div class="row"><span class="lbl">Sats</span><span class="val" id="t-sats">---</span></div>
-    <div class="row"><span class="lbl">HDOP</span><span class="val" id="t-hdop">---</span></div>
+        <div class="status-strip">
+          <div class="ss-item">
+            <span class="ss-label">Status</span>
+            <strong id="status-indicator">Connecting...</strong>
+          </div>
+          <div class="ss-item">
+            <span class="ss-label">Tracks</span>
+            <strong id="track-count">&mdash;</strong>
+          </div>
+          <div class="ss-item">
+            <span class="ss-label">FPS</span>
+            <strong id="det-fps">&mdash;</strong>
+          </div>
+          <div class="ss-item">
+            <span class="ss-label">MAVLink</span>
+            <strong id="mav-status"><span class="dot" id="mav-dot"></span> &mdash;</strong>
+          </div>
+          <div class="ss-item">
+            <span class="ss-label">LoRa</span>
+            <strong id="lora-status"><span class="dot" id="lora-dot"></span> &mdash;</strong>
+          </div>
+        </div>
+
+        <p id="error-message" class="status-error"></p>
+      </div>
+
+      <!-- ====== Right: Sidebar Tabs ====== -->
+      <aside class="sidebar">
+        <nav class="sidebar-tabs" role="tablist">
+          <button class="tab-btn active" data-tab="detection" role="tab">Detection</button>
+          <button class="tab-btn" data-tab="telemetry" role="tab">Telemetry</button>
+          <button class="tab-btn" data-tab="lora" role="tab">LoRa</button>
+          <button class="tab-btn" data-tab="db" role="tab">DB</button>
+        </nav>
+
+        <div class="sidebar-content">
+
+          <!-- ── Tab 1: Detection ── -->
+          <div id="tab-detection" class="tab-panel active" role="tabpanel">
+
+            <!-- Model & Config -->
+            <section class="card">
+              <header><h2>Model & Config</h2></header>
+              <div class="form-col">
+                <div class="form-row">
+                  <label class="form-label">Model</label>
+                  <div class="input-row">
+                    <select id="model-select"></select>
+                    <button id="model-switch-btn" class="sm">Switch</button>
+                  </div>
+                </div>
+                <div class="slider-field">
+                  <div class="slider-label"><span>Confidence</span><span class="slider-value" id="conf-val">0.50</span></div>
+                  <input type="range" id="conf-slider" min="5" max="100" value="50" />
+                </div>
+                <div class="slider-field">
+                  <div class="slider-label"><span>Save to DB</span><span class="slider-value" id="save-conf-val">0.50</span></div>
+                  <input type="range" id="save-conf-slider" min="5" max="100" value="50" />
+                </div>
+                <div class="form-row">
+                  <label class="form-label">Input Size</label>
+                  <select id="imgsz-select">
+                    <option value="160">160</option>
+                    <option value="320">320</option>
+                    <option value="480">480</option>
+                    <option value="640" selected>640</option>
+                    <option value="960">960</option>
+                    <option value="1280">1280</option>
+                  </select>
+                </div>
+                <div class="slider-field">
+                  <div class="slider-label"><span>Skip Frames</span><span class="slider-value" id="skip-val">0</span></div>
+                  <input type="range" id="skip-slider" min="0" max="30" value="0" />
+                </div>
+                <button id="apply-config-btn" class="accent full-w">Apply</button>
+              </div>
+            </section>
+
+            <!-- Metrics -->
+            <section class="card">
+              <header><h2>Performance</h2></header>
+              <div class="metrics-grid">
+                <div class="metric"><span class="m-label">FPS</span><span class="m-val" id="m-fps">&mdash;</span></div>
+                <div class="metric"><span class="m-label">Inference</span><span class="m-val" id="m-infer">&mdash;</span></div>
+                <div class="metric"><span class="m-label">Avg ms</span><span class="m-val" id="m-avg">&mdash;</span></div>
+                <div class="metric"><span class="m-label">Frame #</span><span class="m-val" id="m-frame">&mdash;</span></div>
+                <div class="metric"><span class="m-label">Tracks</span><span class="m-val" id="m-tracks">&mdash;</span></div>
+                <div class="metric"><span class="m-label">Total Det.</span><span class="m-val" id="m-total">&mdash;</span></div>
+              </div>
+            </section>
+
+            <!-- Active Tracks -->
+            <section class="card">
+              <header><h2>Active Tracks</h2><span id="tracker-refresh" class="link-btn">Refresh</span></header>
+              <div id="tracker-list" class="tracker-list empty-state">No active tracks</div>
+            </section>
+          </div>
+
+          <!-- ── Tab 2: Telemetry ── -->
+          <div id="tab-telemetry" class="tab-panel" role="tabpanel">
+            <div class="tgrid">
+              <div class="tcard">
+                <h3>GPS</h3>
+                <div class="row"><span class="lbl">Lat</span><span class="val" id="t-lat">&mdash;</span></div>
+                <div class="row"><span class="lbl">Lon</span><span class="val" id="t-lon">&mdash;</span></div>
+                <div class="row"><span class="lbl">Alt MSL</span><span class="val" id="t-alt-msl">&mdash;</span></div>
+                <div class="row"><span class="lbl">Alt REL</span><span class="val" id="t-alt-rel">&mdash;</span></div>
+                <div class="row"><span class="lbl">Fix</span><span class="val" id="t-fix">&mdash;</span></div>
+                <div class="row"><span class="lbl">Sats</span><span class="val" id="t-sats">&mdash;</span></div>
+                <div class="row"><span class="lbl">HDOP</span><span class="val" id="t-hdop">&mdash;</span></div>
+              </div>
+              <div class="tcard">
+                <h3>Flight</h3>
+                <div class="row"><span class="lbl">Mode</span><span id="t-mode"><span class="mode-badge">&mdash;</span></span></div>
+                <div class="row"><span class="lbl">Armed</span><span id="t-armed"><span class="armed-badge">&mdash;</span></span></div>
+                <div class="row"><span class="lbl">GndSpeed</span><span class="val" id="t-speed">&mdash;</span></div>
+                <div class="row"><span class="lbl">AirSpeed</span><span class="val" id="t-airspeed">&mdash;</span></div>
+                <div class="row"><span class="lbl">Heading</span><span class="val" id="t-heading">&mdash;</span></div>
+                <div class="row"><span class="lbl">Climb</span><span class="val" id="t-climb">&mdash;</span></div>
+                <div class="row"><span class="lbl">Throttle</span><span class="val" id="t-throttle">&mdash;</span></div>
+              </div>
+              <div class="tcard">
+                <h3>Battery</h3>
+                <div class="row"><span class="lbl">Voltage</span><span class="val" id="t-bat-v">&mdash;</span></div>
+                <div class="row"><span class="lbl">Current</span><span class="val" id="t-bat-a">&mdash;</span></div>
+                <div class="row"><span class="lbl">Remaining</span><span class="val" id="t-bat-pct">&mdash;</span></div>
+                <div class="bat-bar-wrap"><div class="bat-bar high" id="t-bat-bar" style="width:0%"></div></div>
+              </div>
+              <div class="tcard">
+                <h3>Attitude</h3>
+                <div class="row"><span class="lbl">Roll</span><span class="val" id="t-roll">&mdash;</span></div>
+                <div class="row"><span class="lbl">Pitch</span><span class="val" id="t-pitch">&mdash;</span></div>
+                <div class="row"><span class="lbl">Yaw</span><span class="val" id="t-yaw">&mdash;</span></div>
+              </div>
+            </div>
+          </div>
+
+          <!-- ── Tab 3: LoRa ── -->
+          <div id="tab-lora" class="tab-panel" role="tabpanel">
+            <section class="card">
+              <header>
+                <h2>LoRa Link</h2>
+                <span id="lora-conn-label" class="status-label">Disconnected</span>
+              </header>
+              <div class="lora-stats" id="lora-stats"></div>
+              <div class="lora-controls">
+                <input id="lora-text" type="text" placeholder="Message..." />
+                <button id="lora-send-btn" type="button">Send</button>
+              </div>
+            </section>
+            <section class="card flex-1">
+              <header><h2>Message Log</h2><span id="lora-clear-btn" class="link-btn">Clear</span></header>
+              <div id="lora-log" class="lora-log"></div>
+            </section>
+          </div>
+
+          <!-- ── Tab 4: DB (Recordings & Detections) ── -->
+          <div id="tab-db" class="tab-panel" role="tabpanel">
+
+            <!-- Shared filter bar -->
+            <div class="filter-bar">
+              <select id="db-sort">
+                <option value="date-desc">Newest first</option>
+                <option value="date-asc">Oldest first</option>
+                <option value="det-desc">Most detections</option>
+              </select>
+              <input id="sess-class-filter" type="text" placeholder="Filter by class..." />
+              <span id="db-refresh-btn" class="link-btn">Refresh</span>
+            </div>
+
+            <!-- Recordings -->
+            <section class="card">
+              <header>
+                <h2>Recordings</h2>
+                <div class="header-actions">
+                  <span class="rec-indicator"><span class="rec-dot" id="rec-dot"></span><span id="rec-status">Idle</span></span>
+                  <button id="rec-start-btn" class="sm accent">REC</button>
+                  <button id="rec-stop-btn" class="sm danger" disabled>STOP</button>
+                </div>
+              </header>
+              <div id="rec-list" class="rec-list">Loading...</div>
+            </section>
+
+            <!-- Detections -->
+            <section class="card">
+              <header>
+                <h2>Detection Sessions</h2>
+              </header>
+              <div id="sess-list" class="sess-list">Loading...</div>
+            </section>
+          </div>
+
+        </div>
+      </aside>
+
+    </main>
+
+    <details>
+      <summary>WebSocket Logs</summary>
+      <h3 class="ws-section-title">Detection WS</h3>
+      <pre class="log" id="ws-det-log"></pre>
+      <h3 class="ws-section-title">MAVLink WS</h3>
+      <pre class="log" id="ws-mav-log"></pre>
+      <h3 class="ws-section-title">LoRa WS</h3>
+      <pre class="log" id="ws-lora-log"></pre>
+    </details>
+
+    <div class="footer">DC-Detector v0.2 &mdash; Raspberry Pi 5</div>
   </div>
 
-  <!-- Flight -->
-  <div class="tcard">
-    <h3>Flight</h3>
-    <div class="row"><span class="lbl">Mode</span><span id="t-mode"><span class="mode-badge">---</span></span></div>
-    <div class="row"><span class="lbl">Armed</span><span id="t-armed"><span class="armed-badge">---</span></span></div>
-    <div class="row"><span class="lbl">GndSpeed</span><span class="val" id="t-speed">---</span></div>
-    <div class="row"><span class="lbl">AirSpeed</span><span class="val" id="t-airspeed">---</span></div>
-    <div class="row"><span class="lbl">Heading</span><span class="val" id="t-heading">---</span></div>
-    <div class="row"><span class="lbl">Climb</span><span class="val" id="t-climb">---</span></div>
-    <div class="row"><span class="lbl">Throttle</span><span class="val" id="t-throttle">---</span></div>
-  </div>
-
-  <!-- Battery -->
-  <div class="tcard">
-    <h3>Battery</h3>
-    <div class="row"><span class="lbl">Voltage</span><span class="val" id="t-bat-v">---</span></div>
-    <div class="row"><span class="lbl">Current</span><span class="val" id="t-bat-a">---</span></div>
-    <div class="row"><span class="lbl">Remaining</span><span class="val" id="t-bat-pct">---</span></div>
-    <div class="bat-bar-wrap"><div class="bat-bar high" id="t-bat-bar" style="width:0%"></div></div>
-  </div>
-
-  <!-- Attitude -->
-  <div class="tcard">
-    <h3>Attitude</h3>
-    <div class="row"><span class="lbl">Roll</span><span class="val" id="t-roll">---</span></div>
-    <div class="row"><span class="lbl">Pitch</span><span class="val" id="t-pitch">---</span></div>
-    <div class="row"><span class="lbl">Yaw</span><span class="val" id="t-yaw">---</span></div>
-  </div>
-</div>
-
-<!-- ============================================================ -->
-<h2>Video</h2>
-<div class="stream-row">
-  <div class="stream-box">
-    <span class="stream-label">Capture</span>
-    <img id="mjpeg-stream" alt="Capture stream">
-  </div>
-  <div class="stream-box">
-    <span class="stream-label">Detection</span>
-    <img id="det-stream" alt="Detection stream">
-  </div>
-</div>
-<div class="controls">
-  <button onclick="startStream()">Capture stream</button>
-  <button onclick="startDetStream()">Detection stream</button>
-  <button onclick="postAction('cap','recording/start')">Rec Start</button>
-  <button onclick="postAction('cap','recording/stop')">Rec Stop</button>
-</div>
-<pre class="log" id="cap-result" style="display:none"></pre>
-
-<!-- ============================================================ -->
-<h2>LoRa</h2>
-<div class="controls">
-  <input id="lora-text" type="text" placeholder="Message..." size="30">
-  <button onclick="loraSend()">Send</button>
-</div>
-<pre class="log" id="lora-result" style="max-height:80px;margin-top:6px"></pre>
-
-<!-- ============================================================ -->
-<h2>API</h2>
-<div class="tgrid">
-  <div class="tcard">
-    <h3>Capture :<span id="cap-port">8001</span></h3>
-    <div style="font-size:.8rem">
-      <a id="link-stream" href="#" target="_blank">/stream</a> |
-      <a id="link-frame" href="#" target="_blank">/frame</a> |
-      <a id="link-recs" href="#" target="_blank">/recordings</a>
+  <!-- ====== Modal for detection preview ====== -->
+  <div id="det-modal" class="modal hidden" aria-hidden="true">
+    <div class="modal-backdrop" id="modal-backdrop"></div>
+    <div class="modal-dialog" role="dialog" aria-modal="true">
+      <button class="modal-close" id="modal-close" aria-label="Close">&times;</button>
+      <div class="modal-body">
+        <div class="modal-media">
+          <img id="modal-image" alt="Detection" />
+        </div>
+        <div class="modal-meta">
+          <h3>Detection Details</h3>
+          <dl id="modal-dl"></dl>
+        </div>
+      </div>
     </div>
   </div>
-  <div class="tcard">
-    <h3>Detection :<span id="det-port">8002</span></h3>
-    <div style="font-size:.8rem">
-      <a id="link-tracks" href="#" target="_blank">/tracks</a> |
-      <a id="link-dets" href="#" target="_blank">/detections</a> |
-      <a id="link-det-stream" href="#" target="_blank">/stream</a>
-    </div>
-  </div>
-  <div class="tcard">
-    <h3>MAVLink :<span id="mav-port">8003</span></h3>
-    <div style="font-size:.8rem">
-      <a id="link-telem" href="#" target="_blank">/telemetry/structured</a> |
-      <a id="link-mav-status" href="#" target="_blank">/status</a>
-    </div>
-  </div>
-  <div class="tcard">
-    <h3>LoRa :<span id="lora-port">8004</span></h3>
-    <div style="font-size:.8rem">
-      <a id="link-lora-status" href="#" target="_blank">/status</a> |
-      <a id="link-lora-msgs" href="#" target="_blank">/messages</a>
-    </div>
-  </div>
-</div>
 
-<!-- ============================================================ -->
-<details>
-  <summary>WebSocket logs</summary>
-  <h3>MAVLink WS</h3><pre class="log" id="ws-mav-log"></pre>
-  <h3>LoRa WS</h3><pre class="log" id="ws-lora-log"></pre>
-  <h3>Detection WS</h3><pre class="log" id="ws-det-log"></pre>
-  <h3>Capture WS</h3><pre class="log" id="ws-cap-log"></pre>
-</details>
-
-<div class="footer">DC-Detector v0.2 &mdash; Raspberry Pi 5</div>
-
-<!-- ============================================================ -->
-<script>
-const ports = {cap:8001, det:8002, mav:8003, lora:8004};
-const host = location.hostname || 'localhost';
-let mavWs = null, loraWs = null;
-
-// --- Load ports from web_server API ---
-fetch('/api/services').then(r=>r.json()).then(d=>{
-  ports.cap=d.capture.port; ports.det=d.detection.port;
-  ports.mav=d.mavlink.port; ports.lora=d.lora.port;
-  updateLinks();
-  connectMavWS();
-  connectLoraWS();
-}).catch(()=>{
-  updateLinks();
-  connectMavWS();
-  connectLoraWS();
-});
-
-function updateLinks(){
-  const s=(id,p,path)=>{const el=document.getElementById(id);if(el)el.href=`http://${host}:${p}${path}`;};
-  s('link-stream',ports.cap,'/stream'); s('link-frame',ports.cap,'/frame');
-  s('link-recs',ports.cap,'/recordings'); s('link-tracks',ports.det,'/tracks');
-  s('link-dets',ports.det,'/detections'); s('link-det-stream',ports.det,'/stream');
-  s('link-telem',ports.mav,'/telemetry/structured'); s('link-mav-status',ports.mav,'/status');
-  s('link-lora-status',ports.lora,'/status'); s('link-lora-msgs',ports.lora,'/messages');
-  document.getElementById('cap-port').textContent=ports.cap;
-  document.getElementById('det-port').textContent=ports.det;
-  document.getElementById('mav-port').textContent=ports.mav;
-  document.getElementById('lora-port').textContent=ports.lora;
-}
-
-// --- MAVLink WebSocket (auto-connect + telemetry) ---
-function connectMavWS(){
-  if(mavWs && mavWs.readyState<2) return;
-  const url=`ws://${host}:${ports.mav}/ws`;
-  mavWs=new WebSocket(url);
-  const log=document.getElementById('ws-mav-log');
-  mavWs.onopen=()=>{
-    document.getElementById('mav-dot').classList.add('on');
-    log.textContent+='[connected]\n';
-  };
-  mavWs.onmessage=(e)=>{
-    try{
-      const d=JSON.parse(e.data);
-      if(d.structured) updateTelemetry(d.structured);
-      if(d.connected!==undefined){
-        const dot=document.getElementById('mav-dot');
-        d.connected?dot.classList.add('on'):dot.classList.remove('on');
-      }
-    }catch(ex){}
-    log.textContent+=e.data.substring(0,200)+'\n';
-    if(log.textContent.length>20000) log.textContent=log.textContent.slice(-10000);
-    log.scrollTop=log.scrollHeight;
-  };
-  mavWs.onclose=()=>{
-    document.getElementById('mav-dot').classList.remove('on');
-    log.textContent+='[disconnected]\n';
-    setTimeout(connectMavWS,3000);
-  };
-  mavWs.onerror=()=>{};
-}
-
-// --- LoRa WebSocket (auto-connect) ---
-function connectLoraWS(){
-  if(loraWs && loraWs.readyState<2) return;
-  const url=`ws://${host}:${ports.lora}/ws`;
-  loraWs=new WebSocket(url);
-  const log=document.getElementById('ws-lora-log');
-  loraWs.onopen=()=>{
-    document.getElementById('lora-dot').classList.add('on');
-    log.textContent+='[connected]\n';
-  };
-  loraWs.onmessage=(e)=>{
-    try{
-      const d=JSON.parse(e.data);
-      if(d.connected!==undefined){
-        const dot=document.getElementById('lora-dot');
-        d.connected?dot.classList.add('on'):dot.classList.remove('on');
-      }
-    }catch(ex){}
-    log.textContent+=e.data.substring(0,200)+'\n';
-    if(log.textContent.length>20000) log.textContent=log.textContent.slice(-10000);
-    log.scrollTop=log.scrollHeight;
-  };
-  loraWs.onclose=()=>{
-    document.getElementById('lora-dot').classList.remove('on');
-    log.textContent+='[disconnected]\n';
-    setTimeout(connectLoraWS,3000);
-  };
-  loraWs.onerror=()=>{};
-}
-
-// --- Update telemetry UI ---
-const FIX_NAMES={0:'No GPS',1:'No Fix',2:'2D',3:'3D',4:'DGPS',5:'RTK Float',6:'RTK Fixed'};
-function updateTelemetry(t){
-  if(!t) return;
-  const ts=new Date().toLocaleTimeString();
-  document.getElementById('last-update').textContent='Updated: '+ts;
-
-  // GPS
-  const g=t.gps||{};
-  setText('t-lat',(g.lat||0).toFixed(6));
-  setText('t-lon',(g.lon||0).toFixed(6));
-  setText('t-alt-msl',(g.alt_msl||0).toFixed(1)+' m');
-  setText('t-alt-rel',(g.alt_rel||0).toFixed(1)+' m');
-  setText('t-fix',FIX_NAMES[g.fix_type]||g.fix_type);
-  setText('t-sats',g.satellites||0);
-  setText('t-hdop',(g.hdop||0).toFixed(1));
-
-  // Flight
-  const h=t.heartbeat||{};
-  const v=t.vfr||{};
-  document.getElementById('t-mode').innerHTML=`<span class="mode-badge">${h.mode||'N/A'}</span>`;
-  const armed=h.armed;
-  document.getElementById('t-armed').innerHTML=armed
-    ?'<span class="armed-badge yes">ARMED</span>'
-    :'<span class="armed-badge">DISARMED</span>';
-  setText('t-speed',(v.groundspeed||0).toFixed(1)+' m/s');
-  setText('t-airspeed',(v.airspeed||0).toFixed(1)+' m/s');
-  setText('t-heading',(v.heading||0)+'\u00b0');
-  setText('t-climb',(v.climb||0).toFixed(1)+' m/s');
-  setText('t-throttle',(v.throttle||0)+'%');
-
-  // Battery
-  const b=t.battery||{};
-  setText('t-bat-v',(b.voltage||0).toFixed(1)+' V');
-  setText('t-bat-a',(b.current||0).toFixed(1)+' A');
-  const pct=b.remaining>=0?b.remaining:-1;
-  if(pct>=0){
-    setText('t-bat-pct',pct+'%');
-    const bar=document.getElementById('t-bat-bar');
-    bar.style.width=pct+'%';
-    bar.className='bat-bar '+(pct>30?'high':pct>15?'mid':'low');
-    // Color the value
-    const el=document.getElementById('t-bat-pct');
-    el.className='val'+(pct<=15?' crit':pct<=30?' warn':' ok');
-  } else {
-    setText('t-bat-pct','N/A');
-  }
-
-  // Attitude
-  const a=t.attitude||{};
-  setText('t-roll',(a.roll||0).toFixed(1)+'\u00b0');
-  setText('t-pitch',(a.pitch||0).toFixed(1)+'\u00b0');
-  setText('t-yaw',(a.yaw||0).toFixed(1)+'\u00b0');
-}
-
-function setText(id,v){const el=document.getElementById(id);if(el)el.textContent=v;}
-
-// --- Streams ---
-function startStream(){document.getElementById('mjpeg-stream').src=`http://${host}:${ports.cap}/stream`;}
-function startDetStream(){document.getElementById('det-stream').src=`http://${host}:${ports.det}/stream`;}
-
-// --- POST helper ---
-function postAction(svc,path){
-  const el=document.getElementById('cap-result');
-  el.style.display='block';
-  fetch(`http://${host}:${ports[svc]}/${path}`,{method:'POST'})
-    .then(r=>r.json()).then(d=>{el.textContent=JSON.stringify(d,null,2);})
-    .catch(e=>{el.textContent='Error: '+e;});
-}
-
-// --- LoRa send ---
-function loraSend(){
-  const text=document.getElementById('lora-text').value;
-  if(!text) return;
-  fetch(`http://${host}:${ports.lora}/send`,{
-    method:'POST',headers:{'Content-Type':'application/json'},
-    body:JSON.stringify({text})
-  }).then(r=>r.json()).then(d=>{
-    document.getElementById('lora-result').textContent=JSON.stringify(d,null,2);
-    document.getElementById('lora-text').value='';
-  }).catch(e=>{document.getElementById('lora-result').textContent='Error: '+e;});
-}
-</script>
+  <script src="./app.js"></script>
 </body>
 </html>

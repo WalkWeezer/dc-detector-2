@@ -6,30 +6,40 @@ GET  /tracks          Current active tracks (JSON)
 GET  /detections      All detections for the current session
 GET  /media/{name}    Serve a detection JPEG / GIF
 GET  /stream          Annotated MJPEG stream (boxes drawn)
-WS   /ws              Real-time tracks push
+GET  /config          Current runtime detection config
+POST /config          Update runtime detection config
+GET  /models          List available YOLO models
+POST /model           Switch active model
+GET  /metrics         Real-time performance metrics
+GET  /sessions        List all detection sessions
+DELETE /sessions/{id} Delete a detection session
+WS   /ws              Real-time tracks + metrics push
 """
 
 import asyncio
 import csv
 import datetime
+import glob as _glob
 import io
 import json
 import os
+import shutil
 import sys
 import threading
 import time
+from collections import deque
 from contextlib import asynccontextmanager
 from pathlib import Path
 
 import cv2
 import imageio
 import numpy as np
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, Request, WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from PIL import Image
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from config import load_config, get_section  # noqa: E402
+from config import load_config, get_section, project_root  # noqa: E402
 from log_config import setup_logging  # noqa: E402
 
 # ---------------------------------------------------------------------------
@@ -48,6 +58,8 @@ TRACKER = det_cfg.get("tracker", "bytetrack")
 
 cap_cfg = get_section(cfg, "capture")
 SRC_FPS = int(cap_cfg.get("fps", 30))
+
+MODELS_DIR = os.path.join(project_root(), "models")
 
 log = setup_logging("detector", cfg)
 
@@ -69,6 +81,9 @@ async def lifespan(application: FastAPI):
 
 app = FastAPI(title="DC-Detector Detection", lifespan=lifespan)
 
+from fastapi.middleware.cors import CORSMiddleware
+app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
+
 
 # ---------------------------------------------------------------------------
 # Session state
@@ -85,6 +100,24 @@ _ws_clients: list[WebSocket] = []
 
 # Per-track buffers for GIF creation: {track_id: {"frames": [...], "start": float, "done": bool}}
 _gif_buffers: dict[int, dict] = {}
+
+# ---------------------------------------------------------------------------
+# Runtime-mutable config & metrics
+# ---------------------------------------------------------------------------
+_runtime_conf = CONFIDENCE
+_runtime_save_conf = CONFIDENCE  # min confidence to persist detection in DB
+_runtime_imgsz = 640
+_runtime_skip = 0            # skip N frames between inferences
+_pending_model: str | None = None  # set by POST /model to trigger hot-swap
+
+_track_first_seen: dict[int, str] = {}  # track_id → ISO timestamp
+
+# Performance metrics
+_metrics_lock = threading.Lock()
+_fps_times: deque[float] = deque(maxlen=120)
+_frame_ms: deque[float] = deque(maxlen=120)
+_last_inference_ms: float = 0.0
+_current_model_path: str = MODEL_PATH
 
 # ---------------------------------------------------------------------------
 # MJPEG stream reader
@@ -123,7 +156,8 @@ def _read_mjpeg(url: str):
 # ---------------------------------------------------------------------------
 
 def _detection_loop() -> None:
-    global _annotated_frame, _frame_number
+    global _annotated_frame, _frame_number, _current_model_path
+    global _pending_model, _last_inference_ms
 
     os.makedirs(_session_dir, exist_ok=True)
 
@@ -131,20 +165,47 @@ def _detection_loop() -> None:
     try:
         from ultralytics import YOLO
         model = YOLO(MODEL_PATH)
+        _current_model_path = MODEL_PATH
         log.info("Loaded YOLO model: %s", MODEL_PATH)
     except Exception as exc:
         log.error("Failed to load YOLO model: %s", exc)
         return
 
+    skip_counter = 0
+
     for frame in _read_mjpeg(STREAM_URL):
         _frame_number += 1
+
+        # ── Hot-swap model if requested ──
+        if _pending_model is not None:
+            new_path = _pending_model
+            _pending_model = None
+            try:
+                from ultralytics import YOLO as _YOLO
+                model = _YOLO(new_path)
+                _current_model_path = new_path
+                log.info("Hot-swapped model to: %s", new_path)
+            except Exception as exc:
+                log.error("Model swap failed: %s", exc)
+
+        # ── Skip frames to reduce load ──
+        if _runtime_skip > 0:
+            skip_counter += 1
+            if skip_counter <= _runtime_skip:
+                with _lock:
+                    _annotated_frame = frame.copy()
+                continue
+            skip_counter = 0
+
         ts = datetime.datetime.now().isoformat(timespec="milliseconds")
+        t0 = time.perf_counter()
 
         # Run detection + tracking
         try:
             results = model.track(
                 frame,
-                conf=CONFIDENCE,
+                conf=_runtime_conf,
+                imgsz=_runtime_imgsz,
                 persist=True,
                 tracker=f"{TRACKER}.yaml",
                 verbose=False,
@@ -152,6 +213,15 @@ def _detection_loop() -> None:
         except Exception as exc:
             log.error("Detection error: %s", exc)
             continue
+
+        elapsed_ms = (time.perf_counter() - t0) * 1000.0
+
+        # Update metrics
+        now = time.time()
+        with _metrics_lock:
+            _fps_times.append(now)
+            _frame_ms.append(elapsed_ms)
+            _last_inference_ms = elapsed_ms
 
         current_tracks: dict[int, dict] = {}
         if results and results[0].boxes is not None:
@@ -165,6 +235,10 @@ def _detection_loop() -> None:
                 cls_name = model.names.get(cls_id, str(cls_id))
                 track_id = int(box.id[0]) if box.id is not None else -1
 
+                # Track first seen
+                if track_id >= 0 and track_id not in _track_first_seen:
+                    _track_first_seen[track_id] = ts
+
                 track_info = {
                     "track_id": track_id,
                     "class_name": cls_name,
@@ -172,6 +246,7 @@ def _detection_loop() -> None:
                     "bbox": {"x": int(x1), "y": int(y1), "w": w, "h": h},
                     "frame_number": _frame_number,
                     "timestamp": ts,
+                    "first_seen": _track_first_seen.get(track_id, ts),
                 }
 
                 # Save JPEG crop on first appearance
@@ -206,7 +281,8 @@ def _detection_loop() -> None:
             _annotated_frame = annotated
 
             for t in current_tracks.values():
-                _all_detections.append(t)
+                if t["confidence"] >= _runtime_save_conf:
+                    _all_detections.append(t)
 
         # Throttle to avoid overload
         time.sleep(0.001)
@@ -311,6 +387,35 @@ def _periodic_save() -> None:
 
 
 # ---------------------------------------------------------------------------
+# Helpers: metrics
+# ---------------------------------------------------------------------------
+
+def _calc_metrics() -> dict:
+    with _metrics_lock:
+        fps_list = list(_fps_times)
+        ms_list = list(_frame_ms)
+        last_ms = _last_inference_ms
+
+    fps = 0.0
+    if len(fps_list) >= 2:
+        span = fps_list[-1] - fps_list[0]
+        if span > 0:
+            fps = (len(fps_list) - 1) / span
+
+    avg_ms = sum(ms_list) / len(ms_list) if ms_list else 0.0
+
+    return {
+        "fps": round(fps, 1),
+        "avg_frame_ms": round(avg_ms, 1),
+        "last_inference_ms": round(last_ms, 1),
+        "frame_number": _frame_number,
+        "active_tracks": len(_active_tracks),
+        "total_detections": len(_all_detections),
+        "session_id": _session_id,
+    }
+
+
+# ---------------------------------------------------------------------------
 # REST endpoints
 # ---------------------------------------------------------------------------
 
@@ -336,6 +441,142 @@ async def serve_media(path: str):
     if not os.path.isfile(fp):
         return JSONResponse({"error": "not found"}, status_code=404)
     return FileResponse(fp)
+
+
+@app.get("/config")
+async def get_config():
+    return JSONResponse({
+        "confidence": round(_runtime_conf, 3),
+        "save_confidence": round(_runtime_save_conf, 3),
+        "imgsz": _runtime_imgsz,
+        "skip_frames": _runtime_skip,
+        "model_path": _current_model_path,
+        "tracker": TRACKER,
+    })
+
+
+@app.post("/config")
+async def set_config(request: Request):
+    global _runtime_conf, _runtime_save_conf, _runtime_imgsz, _runtime_skip
+    body = await request.json()
+    if "confidence" in body:
+        _runtime_conf = max(0.05, min(1.0, float(body["confidence"])))
+    if "save_confidence" in body:
+        _runtime_save_conf = max(0.05, min(1.0, float(body["save_confidence"])))
+    if "imgsz" in body:
+        v = int(body["imgsz"])
+        if v in (160, 320, 480, 640, 960, 1280):
+            _runtime_imgsz = v
+    if "skip_frames" in body:
+        _runtime_skip = max(0, min(30, int(body["skip_frames"])))
+    log.info("Config updated: conf=%.2f save_conf=%.2f imgsz=%d skip=%d",
+             _runtime_conf, _runtime_save_conf, _runtime_imgsz, _runtime_skip)
+    return JSONResponse({
+        "confidence": round(_runtime_conf, 3),
+        "save_confidence": round(_runtime_save_conf, 3),
+        "imgsz": _runtime_imgsz,
+        "skip_frames": _runtime_skip,
+    })
+
+
+@app.get("/models")
+async def list_models():
+    models = []
+    if os.path.isdir(MODELS_DIR):
+        for ext in ("*.pt", "*.onnx", "*.engine"):
+            for fp in _glob.glob(os.path.join(MODELS_DIR, ext)):
+                name = os.path.basename(fp)
+                size_mb = os.path.getsize(fp) / (1024 * 1024)
+                models.append({"name": name, "path": fp, "size_mb": round(size_mb, 1)})
+    return JSONResponse({
+        "current": os.path.basename(_current_model_path),
+        "models": models,
+    })
+
+
+@app.post("/model")
+async def switch_model(request: Request):
+    global _pending_model
+    body = await request.json()
+    name = body.get("name", "")
+    path = os.path.join(MODELS_DIR, name)
+    if not os.path.isfile(path):
+        return JSONResponse({"error": f"Model not found: {name}"}, status_code=404)
+    _pending_model = path
+    log.info("Model switch requested: %s", path)
+    return JSONResponse({"status": "switching", "model": name})
+
+
+@app.get("/metrics")
+async def get_metrics():
+    return JSONResponse(_calc_metrics())
+
+
+@app.get("/sessions")
+async def list_sessions():
+    """List all detection sessions with metadata."""
+    sessions = []
+    if os.path.isdir(RESULTS_DIR):
+        for entry in sorted(os.listdir(RESULTS_DIR), reverse=True):
+            sdir = os.path.join(RESULTS_DIR, entry)
+            if not os.path.isdir(sdir) or not entry.startswith("session_"):
+                continue
+            sid = entry.replace("session_", "")
+            # Count files
+            files = os.listdir(sdir)
+            jpg_count = sum(1 for f in files if f.endswith(".jpg"))
+            gif_count = sum(1 for f in files if f.endswith(".gif"))
+            has_results = any(f.startswith("results.") for f in files)
+            # Get total size
+            total_size = sum(
+                os.path.getsize(os.path.join(sdir, f))
+                for f in files if os.path.isfile(os.path.join(sdir, f))
+            )
+            # Parse detection count from results file
+            det_count = 0
+            classes = set()
+            results_path = os.path.join(sdir, "results.json")
+            if os.path.isfile(results_path):
+                try:
+                    with open(results_path, "r", encoding="utf-8") as f:
+                        data = json.load(f)
+                    det_count = data.get("total", 0)
+                    for d in data.get("detections", []):
+                        cn = d.get("class_name", "")
+                        if cn:
+                            classes.add(cn)
+                except Exception:
+                    pass
+            sessions.append({
+                "session_id": sid,
+                "dir_name": entry,
+                "detections": det_count,
+                "tracks": jpg_count,
+                "gifs": gif_count,
+                "classes": sorted(classes),
+                "size_bytes": total_size,
+                "has_results": has_results,
+                "created": os.path.getctime(sdir),
+                "active": sid == _session_id,
+            })
+    return JSONResponse({"sessions": sessions})
+
+
+@app.delete("/sessions/{session_id}")
+async def delete_session(session_id: str):
+    """Delete a detection session directory."""
+    sdir = os.path.join(RESULTS_DIR, f"session_{session_id}")
+    if not os.path.isdir(sdir):
+        return JSONResponse({"error": "Session not found"}, status_code=404)
+    if session_id == _session_id:
+        return JSONResponse({"error": "Cannot delete active session"}, status_code=400)
+    try:
+        shutil.rmtree(sdir)
+        log.info("Deleted session: %s", sdir)
+        return JSONResponse({"status": "deleted", "session_id": session_id})
+    except Exception as exc:
+        log.error("Failed to delete session %s: %s", session_id, exc)
+        return JSONResponse({"error": str(exc)}, status_code=500)
 
 
 async def _annotated_mjpeg():
@@ -365,7 +606,7 @@ async def annotated_stream():
 
 
 # ---------------------------------------------------------------------------
-# WebSocket — push active tracks
+# WebSocket — push active tracks + metrics
 # ---------------------------------------------------------------------------
 
 @app.websocket("/ws")
@@ -375,11 +616,13 @@ async def ws_endpoint(ws: WebSocket):
     log.info("Detection WS client connected (%d total)", len(_ws_clients))
     try:
         while True:
+            metrics = _calc_metrics()
             with _lock:
                 payload = {
                     "event": "tracks",
                     "frame_number": _frame_number,
                     "tracks": list(_active_tracks.values()),
+                    "metrics": metrics,
                 }
             await ws.send_json(payload)
             await asyncio.sleep(0.25)  # ~4 updates/sec

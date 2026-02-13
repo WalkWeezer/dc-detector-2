@@ -6,6 +6,15 @@ GET  /status      Connection status
 GET  /messages    Recent received messages
 POST /send        Send a text message  {"text": "..."}
 WS   /ws          Real-time message push
+
+Auto-forwarding (AIR mode):
+  TEL: telemetry   — from mavlink_service every N seconds
+  DET: detections  — new tracks from detector service
+  STS: system status — recording, fps, tracks, model
+
+Command handling (from ground via LoRa):
+  CMD:REC_START  → POST capture /recording/start
+  CMD:REC_STOP   → POST capture /recording/stop
 """
 
 import asyncio
@@ -32,6 +41,17 @@ PORT = int(lora_cfg.get("port", 8004))
 TEL_ENABLED = lora_cfg.get("telemetry_forward", True)
 TEL_INTERVAL = float(lora_cfg.get("telemetry_interval", 2.0))
 MAV_PORT = int(cfg.get("mavlink", {}).get("port", 8003))
+DET_PORT = int(cfg.get("detection", {}).get("port", 8002))
+CAP_PORT = int(cfg.get("capture", {}).get("port", 8001))
+
+# Forward intervals
+DET_INTERVAL = float(lora_cfg.get("detection_interval", 3.0))
+STS_INTERVAL = float(lora_cfg.get("status_interval", 5.0))
+
+# ESP32 WiFi auto-connect (Linux only)
+_esp_wifi_cfg = lora_cfg.get("esp_wifi", {})
+ESP_WIFI_ENABLED = _esp_wifi_cfg.get("enabled", False)
+ESP_WIFI_HOSTNAME = _esp_wifi_cfg.get("hostname", "dc-detect")
 
 log = setup_logging("lora", cfg)
 
@@ -46,12 +66,19 @@ async def lifespan(application: FastAPI):
         threading.Thread(target=_serial_loop, daemon=True).start()
         if TEL_ENABLED:
             threading.Thread(target=_telemetry_forward_loop, daemon=True).start()
+            threading.Thread(target=_detection_forward_loop, daemon=True).start()
+            threading.Thread(target=_status_forward_loop, daemon=True).start()
+        if ESP_WIFI_ENABLED:
+            threading.Thread(target=_esp_wifi_connect_loop, daemon=True).start()
         log.info("LoRa service started on port %d (device=%s)", PORT, DEVICE)
     else:
         log.info("LoRa service disabled in config")
     yield
 
 app = FastAPI(title="DC-Detector LoRa", lifespan=lifespan)
+
+from fastapi.middleware.cors import CORSMiddleware
+app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
 
 
 # ---------------------------------------------------------------------------
@@ -64,13 +91,25 @@ _messages: list[dict] = []
 _ws_clients: list[WebSocket] = []
 _MAX_MSG = 1000
 
+# Track IDs already sent as DET: to avoid duplicates
+_sent_track_ids: set[int] = set()
+
+# ESP32 WiFi connection state
+_esp_wifi_connected = False
+_esp_wifi_ip = ""
+_esp_wifi_ssid = ""
+
+# AP info received from ESP32 via serial (AP:ssid,password,ip)
+_esp_ap_ssid = ""
+_esp_ap_password = ""
+
 
 # ---------------------------------------------------------------------------
 # Serial reader thread
 # ---------------------------------------------------------------------------
 
 def _serial_loop() -> None:
-    global _connected, _serial_port
+    global _connected, _serial_port, _esp_ap_ssid, _esp_ap_password
 
     try:
         import serial
@@ -111,9 +150,21 @@ def _serial_loop() -> None:
                         except (ValueError, IndexError):
                             pass
 
-                    # Tag telemetry messages
+                    # Tag message types
                     if "TEL:" in line:
                         msg["type"] = "telemetry_rx"
+                    elif line.startswith("CMD:"):
+                        msg["type"] = "command"
+                        # Process command from ground station
+                        cmd = line[4:].strip()
+                        _handle_command(cmd)
+                    elif line.startswith("AP:"):
+                        msg["type"] = "ap_info"
+                        parts = line[3:].split(",")
+                        if len(parts) >= 2:
+                            _esp_ap_ssid = parts[0]
+                            _esp_ap_password = parts[1]
+                            log.debug("ESP32 AP info: SSID=%s", _esp_ap_ssid)
 
                     with _lock:
                         _messages.append(msg)
@@ -129,7 +180,33 @@ def _serial_loop() -> None:
 
 
 # ---------------------------------------------------------------------------
-# Telemetry forward thread
+# Command handler (ground station → Pi services)
+# ---------------------------------------------------------------------------
+
+def _handle_command(cmd: str) -> None:
+    """Process command received from ground station via LoRa."""
+    try:
+        import httpx
+    except ImportError:
+        log.error("httpx not installed — cannot process commands")
+        return
+
+    log.info("Processing ground CMD: %s", cmd)
+    try:
+        if cmd == "REC_START":
+            resp = httpx.post(f"http://localhost:{CAP_PORT}/recording/start", timeout=3.0)
+            log.info("CMD REC_START → capture: %s", resp.json())
+        elif cmd == "REC_STOP":
+            resp = httpx.post(f"http://localhost:{CAP_PORT}/recording/stop", timeout=3.0)
+            log.info("CMD REC_STOP → capture: %s", resp.json())
+        else:
+            log.warning("Unknown ground command: %s", cmd)
+    except Exception as exc:
+        log.error("Command execution error: %s", exc)
+
+
+# ---------------------------------------------------------------------------
+# Telemetry forward thread (TEL: lines from MAVLink → ESP32)
 # ---------------------------------------------------------------------------
 
 def _telemetry_forward_loop() -> None:
@@ -167,6 +244,301 @@ def _telemetry_forward_loop() -> None:
 
 
 # ---------------------------------------------------------------------------
+# Detection forward thread (DET: new tracks → ESP32 → LoRa → ground)
+# ---------------------------------------------------------------------------
+
+def _detection_forward_loop() -> None:
+    """Poll detector for new tracks and send DET: alerts via serial to ESP32."""
+    try:
+        import httpx
+    except ImportError:
+        log.error("httpx not installed — detection forwarding disabled")
+        return
+
+    log.info("Detection forward thread started (interval=%.1fs)", DET_INTERVAL)
+    tracks_url = f"http://localhost:{DET_PORT}/tracks"
+    tel_url = f"http://localhost:{MAV_PORT}/telemetry/structured"
+    cached_gps = {"lat": 0.0, "lon": 0.0, "alt": 0.0}
+
+    while True:
+        time.sleep(DET_INTERVAL)
+        if _serial_port is None or not _connected:
+            continue
+        try:
+            # Get current active tracks from detector
+            resp = httpx.get(tracks_url, timeout=2.0)
+            if resp.status_code != 200:
+                continue
+            tracks = resp.json().get("tracks", [])
+
+            # Update cached GPS from mavlink
+            try:
+                gps_resp = httpx.get(tel_url, timeout=2.0)
+                if gps_resp.status_code == 200:
+                    gps = gps_resp.json().get("telemetry", {}).get("gps", {})
+                    cached_gps["lat"] = gps.get("lat", 0.0)
+                    cached_gps["lon"] = gps.get("lon", 0.0)
+                    cached_gps["alt"] = gps.get("alt_msl", 0.0)
+            except Exception:
+                pass
+
+            # Send DET: for new track IDs only
+            for t in tracks:
+                tid = t.get("track_id", -1)
+                if tid < 0 or tid in _sent_track_ids:
+                    continue
+                _sent_track_ids.add(tid)
+
+                cls = t.get("class_name", "unknown")
+                conf = t.get("confidence", 0.0)
+                lat = cached_gps["lat"]
+                lon = cached_gps["lon"]
+                alt = cached_gps["alt"]
+
+                det_line = f"DET:{cls},{conf:.2f},{tid},{lat:.6f},{lon:.6f},{alt:.1f}"
+                payload = (det_line + "\n").encode("utf-8")
+                _serial_port.write(payload)
+                with _lock:
+                    _messages.append({
+                        "direction": "tx",
+                        "data": det_line,
+                        "ts": time.time(),
+                        "type": "detection",
+                    })
+                log.info("DET forwarded: %s", det_line)
+
+        except Exception as exc:
+            log.debug("Detection forward error: %s", exc)
+
+
+# ---------------------------------------------------------------------------
+# Status forward thread (STS: system status → ESP32 → LoRa → ground)
+# ---------------------------------------------------------------------------
+
+def _status_forward_loop() -> None:
+    """Periodically send STS: system status over serial to ESP32."""
+    try:
+        import httpx
+    except ImportError:
+        log.error("httpx not installed — status forwarding disabled")
+        return
+
+    log.info("Status forward thread started (interval=%.1fs)", STS_INTERVAL)
+    metrics_url = f"http://localhost:{DET_PORT}/metrics"
+    config_url = f"http://localhost:{DET_PORT}/config"
+    cap_status_url = f"http://localhost:{CAP_PORT}/status"
+
+    while True:
+        time.sleep(STS_INTERVAL)
+        if _serial_port is None or not _connected:
+            continue
+        try:
+            recording = False
+            fps = 0.0
+            tracks = 0
+            model = "N/A"
+
+            # Get capture recording status
+            try:
+                resp = httpx.get(cap_status_url, timeout=2.0)
+                if resp.status_code == 200:
+                    recording = resp.json().get("recording", False)
+            except Exception:
+                pass
+
+            # Get detector metrics (fps, active tracks)
+            try:
+                resp = httpx.get(metrics_url, timeout=2.0)
+                if resp.status_code == 200:
+                    data = resp.json()
+                    fps = data.get("fps", 0.0)
+                    tracks = data.get("active_tracks", 0)
+            except Exception:
+                pass
+
+            # Get current model name
+            try:
+                resp = httpx.get(config_url, timeout=2.0)
+                if resp.status_code == 200:
+                    mp = resp.json().get("model_path", "")
+                    if mp:
+                        model = os.path.basename(mp)
+            except Exception:
+                pass
+
+            rec_int = 1 if recording else 0
+            sts_line = f"STS:{rec_int},{fps:.1f},{tracks},{model}"
+            payload = (sts_line + "\n").encode("utf-8")
+            _serial_port.write(payload)
+            with _lock:
+                _messages.append({
+                    "direction": "tx",
+                    "data": sts_line,
+                    "ts": time.time(),
+                    "type": "status",
+                })
+            log.debug("STS forwarded: %s", sts_line)
+
+        except Exception as exc:
+            log.debug("Status forward error: %s", exc)
+
+
+# ---------------------------------------------------------------------------
+# ESP32 WiFi auto-connect thread (Pi → ESP32 AP, Linux only)
+# ---------------------------------------------------------------------------
+
+def _esp_wifi_connect_loop() -> None:
+    """Auto-connect Pi to ESP32 WiFi AP using SSID/password received via serial."""
+    global _esp_wifi_connected, _esp_wifi_ip, _esp_wifi_ssid
+
+    import platform
+    if platform.system() != "Linux":
+        log.info("ESP WiFi auto-connect: skipped (not Linux)")
+        return
+
+    import subprocess
+
+    # Check if nmcli is available
+    try:
+        result = subprocess.run(["nmcli", "--version"], capture_output=True, timeout=5)
+        if result.returncode != 0:
+            log.warning("nmcli not available — ESP WiFi auto-connect disabled")
+            return
+    except FileNotFoundError:
+        log.warning("nmcli not found — ESP WiFi auto-connect disabled")
+        return
+
+    WEB_PORT = int(cfg.get("web", {}).get("port", 8080))
+    avahi_proc = None
+    last_wifi_send = 0.0
+
+    log.info("ESP WiFi auto-connect thread started (hostname=%s), waiting for AP info from serial...",
+             ESP_WIFI_HOSTNAME)
+
+    while True:
+        # --- Already connected: monitor + periodically re-send info ---
+        if _esp_wifi_connected:
+            # Re-send WIFI info to ESP32 every 30s (in case ESP32 rebooted)
+            if time.time() - last_wifi_send > 30 and _serial_port and _connected:
+                wifi_line = f"WIFI:{_esp_wifi_ip},{ESP_WIFI_HOSTNAME},{WEB_PORT}"
+                try:
+                    _serial_port.write((wifi_line + "\n").encode("utf-8"))
+                    last_wifi_send = time.time()
+                except Exception:
+                    pass
+
+            # Check if still connected
+            try:
+                result = subprocess.run(
+                    ["nmcli", "-t", "-f", "GENERAL.STATE", "device", "show", "wlan0"],
+                    capture_output=True, text=True, timeout=5,
+                )
+                if "100" not in result.stdout:  # "100 (connected)"
+                    _esp_wifi_connected = False
+                    _esp_wifi_ip = ""
+                    log.warning("Lost ESP32 WiFi connection, will retry")
+                    if avahi_proc:
+                        avahi_proc.kill()
+                        avahi_proc = None
+            except Exception:
+                pass
+            time.sleep(10)
+            continue
+
+        # --- Wait for AP info from ESP32 via serial ---
+        if not _esp_ap_ssid:
+            time.sleep(5)
+            continue
+
+        target = _esp_ap_ssid
+        password = _esp_ap_password
+
+        # --- Connect to the exact SSID received from our ESP32 ---
+        try:
+            log.info("Connecting to ESP32 AP: %s", target)
+
+            # Remove stale connection profiles for this SSID
+            try:
+                subprocess.run(
+                    ["nmcli", "connection", "delete", target],
+                    capture_output=True, timeout=5,
+                )
+            except Exception:
+                pass
+
+            # Connect
+            result = subprocess.run(
+                ["nmcli", "device", "wifi", "connect", target,
+                 "password", password],
+                capture_output=True, text=True, timeout=30,
+            )
+
+            if result.returncode != 0:
+                log.warning("Failed to connect to %s: %s", target, result.stderr.strip())
+                time.sleep(10)
+                continue
+
+            # Wait for DHCP
+            time.sleep(3)
+
+            # Get assigned IP
+            ip = ""
+            try:
+                result = subprocess.run(
+                    ["nmcli", "-t", "-f", "IP4.ADDRESS", "connection", "show", target],
+                    capture_output=True, text=True, timeout=5,
+                )
+                for line in result.stdout.strip().split("\n"):
+                    if ":" in line:
+                        addr = line.split(":", 1)[-1].strip()
+                        if "/" in addr:
+                            addr = addr.split("/")[0]
+                        if addr:
+                            ip = addr
+                            break
+            except Exception:
+                pass
+
+            if not ip:
+                log.warning("Connected to %s but no IP assigned", target)
+                time.sleep(5)
+                continue
+
+            _esp_wifi_connected = True
+            _esp_wifi_ip = ip
+            _esp_wifi_ssid = target
+            log.info("Connected to ESP32 AP %s — IP: %s", target, ip)
+
+            # Send WIFI info to ESP32 via serial
+            wifi_line = f"WIFI:{ip},{ESP_WIFI_HOSTNAME},{WEB_PORT}"
+            if _serial_port and _connected:
+                try:
+                    _serial_port.write((wifi_line + "\n").encode("utf-8"))
+                    last_wifi_send = time.time()
+                    log.info("Sent WiFi info to ESP32: %s", wifi_line)
+                except Exception as exc:
+                    log.warning("Failed to send WiFi info: %s", exc)
+
+            # Publish mDNS hostname via avahi
+            if avahi_proc:
+                avahi_proc.kill()
+                avahi_proc = None
+            try:
+                avahi_proc = subprocess.Popen(
+                    ["avahi-publish", "-a", f"{ESP_WIFI_HOSTNAME}.local", ip],
+                    stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                )
+                log.info("mDNS: publishing %s.local -> %s", ESP_WIFI_HOSTNAME, ip)
+            except FileNotFoundError:
+                log.warning("avahi-publish not found — access Pi via IP: %s:%d", ip, WEB_PORT)
+
+        except Exception as exc:
+            log.debug("ESP WiFi connect error: %s", exc)
+
+        time.sleep(10)
+
+
+# ---------------------------------------------------------------------------
 # REST
 # ---------------------------------------------------------------------------
 
@@ -179,7 +551,25 @@ async def get_status():
             "baudrate": BAUDRATE,
             "total_messages": len(_messages),
             "telemetry_forward": TEL_ENABLED,
+            "esp_wifi": {
+                "enabled": ESP_WIFI_ENABLED,
+                "connected": _esp_wifi_connected,
+                "ssid": _esp_wifi_ssid,
+                "ip": _esp_wifi_ip,
+                "hostname": ESP_WIFI_HOSTNAME,
+            },
         })
+
+
+@app.get("/esp_wifi")
+async def get_esp_wifi():
+    return JSONResponse({
+        "enabled": ESP_WIFI_ENABLED,
+        "connected": _esp_wifi_connected,
+        "ssid": _esp_wifi_ssid,
+        "ip": _esp_wifi_ip,
+        "hostname": ESP_WIFI_HOSTNAME,
+    })
 
 
 @app.get("/messages")

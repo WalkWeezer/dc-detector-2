@@ -12,8 +12,8 @@ capture:
   # Camera device index (0 = first camera)
   device_index: 0
   # Capture resolution & FPS
-  width: 640
-  height: 640
+  width: 1280
+  height: 720
   fps: 30
   # Port for the MJPEG / API server
   port: 8001
@@ -72,6 +72,16 @@ lora:
   telemetry_forward: true
   # Interval in seconds between telemetry pushes
   telemetry_interval: 2.0
+  # Detection forward interval in seconds
+  detection_interval: 3.0
+  # Status forward interval in seconds
+  status_interval: 5.0
+  # Auto-connect Raspberry Pi to ESP32 WiFi AP (Linux only, uses nmcli)
+  # SSID and password are received from ESP32 via UART automatically
+  esp_wifi:
+    enabled: true
+    # mDNS hostname — Pi dashboard accessible at http://<hostname>.local:8080
+    hostname: "dc-detect"
 
 # ---------------------------------------------------------------------------
 # Web server (main UI entry point)

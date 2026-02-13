@@ -60,6 +60,20 @@ _recording_path: str | None = None
 _cap: cv2.VideoCapture | None = None
 _playback_mode = False
 _ws_clients: list[WebSocket] = []
+_actual_fps: float = FPS  # actual camera FPS for recording
+
+
+def _update_actual_fps(cap: cv2.VideoCapture | None) -> None:
+    """Read actual FPS from the camera and store it for VideoWriter."""
+    global _actual_fps
+    if cap is None:
+        return
+    reported = cap.get(cv2.CAP_PROP_FPS)
+    if reported and reported > 0:
+        _actual_fps = reported
+        log.info("Actual camera FPS for recording: %.1f", _actual_fps)
+    else:
+        _actual_fps = FPS
 
 
 # ---------------------------------------------------------------------------
@@ -101,6 +115,11 @@ def _apply_props(cap: cv2.VideoCapture) -> None:
     cap.set(cv2.CAP_PROP_FRAME_WIDTH, WIDTH)
     cap.set(cv2.CAP_PROP_FRAME_HEIGHT, HEIGHT)
     cap.set(cv2.CAP_PROP_FPS, FPS)
+    actual_w = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+    actual_h = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+    actual_fps = cap.get(cv2.CAP_PROP_FPS)
+    log.info("Camera actual resolution: %dx%d @ %.1f fps (requested %dx%d @ %d)",
+             actual_w, actual_h, actual_fps, WIDTH, HEIGHT, FPS)
 
 
 def _no_signal_frame() -> np.ndarray:
@@ -140,16 +159,22 @@ def _capture_loop() -> None:
     with _lock:
         _cap = cap_local
 
+    # Detect actual camera FPS for recording
+    _update_actual_fps(cap_local)
+
     # Start recording by default if enabled and source is live
     if REC_ENABLED and SRC != "file":
         _start_recording_internal()
 
     frame_interval = 1.0 / max(FPS, 1)
     while True:
+        t_start = time.monotonic()
+
         # Re-read _cap under lock — playback/stop endpoints may swap it
         with _lock:
             if _cap is not cap_local:
                 cap_local = _cap
+                _update_actual_fps(cap_local)
 
         if cap_local is None:
             with _lock:
@@ -159,6 +184,7 @@ def _capture_loop() -> None:
             cap_local = _open_source(SRC, VIDEO_FILE, DEVICE_INDEX)
             if cap_local is not None:
                 _apply_props(cap_local)
+                _update_actual_fps(cap_local)
                 with _lock:
                     _cap = cap_local
                 log.info("Camera reconnected")
@@ -176,16 +202,34 @@ def _capture_loop() -> None:
             time.sleep(RETRY_INTERVAL)
             continue
 
-        # Resize to configured resolution
-        if frame.shape[1] != WIDTH or frame.shape[0] != HEIGHT:
-            frame = cv2.resize(frame, (WIDTH, HEIGHT))
+        # Resize only if camera returns a larger frame than configured,
+        # preserving the original aspect ratio (no stretching/squashing).
+        fh, fw = frame.shape[:2]
+        if fw != WIDTH or fh != HEIGHT:
+            src_ratio = fw / fh
+            dst_ratio = WIDTH / HEIGHT
+            if abs(src_ratio - dst_ratio) < 0.01:
+                # Same aspect ratio — simple resize
+                frame = cv2.resize(frame, (WIDTH, HEIGHT))
+            else:
+                # Different aspect ratio — fit inside WIDTH x HEIGHT, keep AR
+                scale = min(WIDTH / fw, HEIGHT / fh)
+                new_w = int(fw * scale)
+                new_h = int(fh * scale)
+                frame = cv2.resize(frame, (new_w, new_h))
 
         with _lock:
             _latest_frame = frame
             if _recording and _video_writer is not None:
                 _video_writer.write(frame)
 
-        time.sleep(frame_interval)
+        # Sleep only for the remaining time to hit target FPS.
+        # cap.read() already blocks for live cameras, so this avoids
+        # doubling the frame interval.
+        elapsed = time.monotonic() - t_start
+        sleep_time = frame_interval - elapsed
+        if sleep_time > 0:
+            time.sleep(sleep_time)
 
 
 # ---------------------------------------------------------------------------
@@ -199,9 +243,14 @@ def _start_recording_internal() -> str:
     ext = ".avi"
     _recording_path = os.path.join(REC_DIR, f"rec_{ts}{ext}")
     fourcc = cv2.VideoWriter_fourcc(*REC_CODEC)
-    _video_writer = cv2.VideoWriter(_recording_path, fourcc, FPS, (WIDTH, HEIGHT))
+    # Use actual frame size (not config) so recording matches the stream
+    with _lock:
+        f = _latest_frame
+    rec_w = f.shape[1] if f is not None else WIDTH
+    rec_h = f.shape[0] if f is not None else HEIGHT
+    _video_writer = cv2.VideoWriter(_recording_path, fourcc, _actual_fps, (rec_w, rec_h))
     _recording = True
-    log.info("Recording started: %s", _recording_path)
+    log.info("Recording started: %s (%dx%d @ %.1f fps)", _recording_path, rec_w, rec_h, _actual_fps)
     return _recording_path
 
 
@@ -253,10 +302,24 @@ async def lifespan(application: FastAPI):
 
 app = FastAPI(title="DC-Detector Capture", lifespan=lifespan)
 
+from fastapi.middleware.cors import CORSMiddleware
+app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
+
 
 # ---------------------------------------------------------------------------
 # REST endpoints
 # ---------------------------------------------------------------------------
+
+@app.get("/status")
+async def get_status():
+    with _lock:
+        return JSONResponse({
+            "recording": _recording,
+            "recording_path": _recording_path,
+            "playback": _playback_mode,
+            "frame_available": _latest_frame is not None,
+        })
+
 
 @app.get("/stream")
 async def stream():
@@ -322,6 +385,24 @@ async def download_recording(name: str):
     if not os.path.isfile(fp):
         return JSONResponse({"error": "not found"}, status_code=404)
     return FileResponse(fp, filename=name)
+
+
+@app.delete("/recordings/{name}")
+async def delete_recording(name: str):
+    fp = os.path.join(REC_DIR, name)
+    if not os.path.isfile(fp):
+        return JSONResponse({"error": "not found"}, status_code=404)
+    # Don't delete if it's the active recording
+    with _lock:
+        if _recording and _recording_path and os.path.basename(_recording_path) == name:
+            return JSONResponse({"error": "Cannot delete active recording"}, status_code=400)
+    try:
+        os.remove(fp)
+        log.info("Deleted recording: %s", fp)
+        return JSONResponse({"status": "deleted", "filename": name})
+    except Exception as exc:
+        log.error("Failed to delete recording %s: %s", name, exc)
+        return JSONResponse({"error": str(exc)}, status_code=500)
 
 
 class PlaybackRequest(BaseModel):

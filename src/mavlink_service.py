@@ -74,6 +74,9 @@ async def lifespan(application: FastAPI):
 
 app = FastAPI(title="DC-Detector MAVLink", lifespan=lifespan)
 
+from fastapi.middleware.cors import CORSMiddleware
+app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
+
 
 # ---------------------------------------------------------------------------
 # State
