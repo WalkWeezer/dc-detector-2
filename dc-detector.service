@@ -4,10 +4,10 @@ After=network.target
 
 [Service]
 Type=simple
-User=pi
-WorkingDirectory=/home/pi/dc-detector-2
-ExecStart=/home/pi/dc-detector-2/venv/bin/python src/launcher.py
-Environment=PYTHONPATH=/home/pi/dc-detector-2/src
+User=admin
+WorkingDirectory=/home/admin/dc-detector-2
+ExecStart=/home/admin/dc-detector-2/venv/bin/python src/launcher.py
+Environment=PYTHONPATH=/home/admin/dc-detector-2/src
 Restart=on-failure
 RestartSec=5
 StandardOutput=journal
