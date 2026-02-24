@@ -214,17 +214,22 @@
 
     </main>
 
-    <details>
-      <summary>WebSocket Logs</summary>
-      <h3 class="ws-section-title">Detection WS</h3>
-      <pre class="log" id="ws-det-log"></pre>
-      <h3 class="ws-section-title">MAVLink WS</h3>
-      <pre class="log" id="ws-mav-log"></pre>
-      <h3 class="ws-section-title">LoRa WS</h3>
-      <pre class="log" id="ws-lora-log"></pre>
-    </details>
-
-    <div class="footer">DC-Detector v0.2 &mdash; Raspberry Pi 5</div>
+    <!-- ====== Floating WS Log Popup ====== -->
+    <button id="log-toggle" class="log-toggle" title="WebSocket Logs">LOG</button>
+    <div id="log-popup" class="log-popup hidden">
+      <div class="log-popup-header">
+        <span>WebSocket Logs</span>
+        <button id="log-popup-close" class="log-popup-close" aria-label="Close">&times;</button>
+      </div>
+      <div class="log-popup-body">
+        <h4 class="ws-section-title">Detection</h4>
+        <pre class="log" id="ws-det-log"></pre>
+        <h4 class="ws-section-title">MAVLink</h4>
+        <pre class="log" id="ws-mav-log"></pre>
+        <h4 class="ws-section-title">LoRa</h4>
+        <pre class="log" id="ws-lora-log"></pre>
+      </div>
+    </div>
   </div>
 
   <!-- ====== Modal for detection preview ====== -->

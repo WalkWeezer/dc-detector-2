@@ -141,12 +141,15 @@ class Picamera2Capture:
 
 def _try_picamera2(width: int, height: int, fps: int) -> Picamera2Capture | None:
     """Try to open camera via Picamera2. Returns None if unavailable."""
+    log.info("Trying Picamera2 backend (%dx%d@%dfps)...", width, height, fps)
     try:
         cap = Picamera2Capture(width, height, fps)
         if cap.isOpened():
             return cap
-    except ImportError:
-        log.debug("Picamera2 not installed, skipping rpicam backend")
+    except ImportError as exc:
+        log.warning("Picamera2 not available: %s  "
+                     "(install: sudo apt install python3-picamera2, "
+                     "venv must use --system-site-packages)", exc)
     except Exception as exc:
         log.warning("Picamera2 init failed: %s", exc)
     return None
@@ -158,6 +161,7 @@ def _try_picamera2(width: int, height: int, fps: int) -> Picamera2Capture | None
 
 def _open_source(source: str, video_file: str, device_index: int) -> cv2.VideoCapture | Picamera2Capture | None:
     """Open the video source based on config.  Returns None if nothing works."""
+    log.info("Opening camera source=%s, platform=%s", source, platform.system())
     if source == "file":
         if not video_file or not os.path.isfile(video_file):
             log.error("Video file not found: %s", video_file)

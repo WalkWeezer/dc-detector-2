@@ -49,6 +49,8 @@
     modalClose: $('modal-close'), modalImage: $('modal-image'), modalDl: $('modal-dl'),
     // WS logs
     wsDetLog: $('ws-det-log'), wsMavLog: $('ws-mav-log'), wsLoraLog: $('ws-lora-log'),
+    // Log popup
+    logToggle: $('log-toggle'), logPopup: $('log-popup'), logPopupClose: $('log-popup-close'),
   };
 
   const overlayCtx = els.overlay ? els.overlay.getContext('2d') : null;
@@ -962,7 +964,21 @@
     // Modal
     if (els.modalClose) els.modalClose.addEventListener('click', closeModal);
     if (els.modalBackdrop) els.modalBackdrop.addEventListener('click', closeModal);
-    document.addEventListener('keydown', (e) => { if (e.key === 'Escape') closeModal(); });
+    document.addEventListener('keydown', (e) => { if (e.key === 'Escape') { closeModal(); closeLogPopup(); } });
+
+    // Log popup
+    if (els.logToggle) els.logToggle.addEventListener('click', toggleLogPopup);
+    if (els.logPopupClose) els.logPopupClose.addEventListener('click', closeLogPopup);
+  }
+
+  // ---------------------------------------------------------------------------
+  // Log popup
+  // ---------------------------------------------------------------------------
+  function toggleLogPopup() {
+    if (els.logPopup) els.logPopup.classList.toggle('hidden');
+  }
+  function closeLogPopup() {
+    if (els.logPopup) els.logPopup.classList.add('hidden');
   }
 
   // ---------------------------------------------------------------------------
