@@ -5,7 +5,10 @@
 # Video capture
 # ---------------------------------------------------------------------------
 capture:
-  # Source: "auto" (CSI → USB fallback), "csi", "usb", "file"
+  # Source: "auto" (rpicam → CSI → USB fallback), "rpicam", "csi", "usb", "file"
+  #   rpicam — Picamera2 (Raspberry Pi 5 / Bookworm, recommended for CSI cameras)
+  #   csi    — OpenCV V4L2 backend (legacy)
+  #   auto   — tries rpicam first (Linux only), then csi, then usb
   source: "auto"
   # Path to video file (used when source: "file" or playback mode)
   video_file: ""

@@ -21,6 +21,8 @@ import threading
 import time
 from contextlib import asynccontextmanager
 
+import platform
+
 import cv2
 import numpy as np
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
@@ -57,7 +59,7 @@ _latest_frame: np.ndarray | None = None
 _recording = False
 _video_writer: cv2.VideoWriter | None = None
 _recording_path: str | None = None
-_cap: cv2.VideoCapture | None = None
+_cap: "cv2.VideoCapture | Picamera2Capture | None" = None
 _playback_mode = False
 _ws_clients: list[WebSocket] = []
 _actual_fps: float = FPS  # actual camera FPS for recording
@@ -77,10 +79,84 @@ def _update_actual_fps(cap: cv2.VideoCapture | None) -> None:
 
 
 # ---------------------------------------------------------------------------
+# Picamera2 wrapper (rpicam — Raspberry Pi 5 / Bookworm)
+# ---------------------------------------------------------------------------
+
+class Picamera2Capture:
+    """Wraps Picamera2 with cv2.VideoCapture-compatible read()/release()/isOpened()."""
+
+    def __init__(self, width: int, height: int, fps: int):
+        from picamera2 import Picamera2
+        self._cam = Picamera2()
+        config = self._cam.create_video_configuration(
+            main={"size": (width, height), "format": "RGB888"},
+            controls={"FrameRate": fps},
+        )
+        self._cam.configure(config)
+        self._cam.start()
+        # Let auto-exposure settle
+        time.sleep(1.0)
+        self._opened = True
+        props = self._cam.camera_properties
+        log.info("Picamera2 opened: sensor=%s, requested %dx%d@%dfps",
+                 props.get("Model", "?"), width, height, fps)
+
+    def isOpened(self) -> bool:
+        return self._opened
+
+    def read(self) -> tuple[bool, np.ndarray | None]:
+        if not self._opened:
+            return False, None
+        try:
+            frame_rgb = self._cam.capture_array()
+            # Picamera2 returns RGB, OpenCV expects BGR
+            frame_bgr = cv2.cvtColor(frame_rgb, cv2.COLOR_RGB2BGR)
+            return True, frame_bgr
+        except Exception as exc:
+            log.warning("Picamera2 read error: %s", exc)
+            return False, None
+
+    def get(self, prop_id: int) -> float:
+        if prop_id == cv2.CAP_PROP_FPS:
+            return float(FPS)
+        if prop_id == cv2.CAP_PROP_FRAME_WIDTH:
+            return float(WIDTH)
+        if prop_id == cv2.CAP_PROP_FRAME_HEIGHT:
+            return float(HEIGHT)
+        return 0.0
+
+    def set(self, prop_id: int, value: float) -> bool:
+        # Resolution/FPS are set at configure time, ignore runtime changes
+        return True
+
+    def release(self) -> None:
+        if self._opened:
+            self._opened = False
+            try:
+                self._cam.stop()
+                self._cam.close()
+            except Exception:
+                pass
+
+
+def _try_picamera2(width: int, height: int, fps: int) -> Picamera2Capture | None:
+    """Try to open camera via Picamera2. Returns None if unavailable."""
+    try:
+        cap = Picamera2Capture(width, height, fps)
+        if cap.isOpened():
+            return cap
+    except ImportError:
+        log.debug("Picamera2 not installed, skipping rpicam backend")
+    except Exception as exc:
+        log.warning("Picamera2 init failed: %s", exc)
+    return None
+
+
+# ---------------------------------------------------------------------------
 # Camera helpers
 # ---------------------------------------------------------------------------
 
-def _open_source(source: str, video_file: str, device_index: int) -> cv2.VideoCapture | None:
+def _open_source(source: str, video_file: str, device_index: int) -> cv2.VideoCapture | Picamera2Capture | None:
     """Open the video source based on config.  Returns None if nothing works."""
     if source == "file":
         if not video_file or not os.path.isfile(video_file):
@@ -92,8 +168,21 @@ def _open_source(source: str, video_file: str, device_index: int) -> cv2.VideoCa
             return cap
         return None
 
+    # rpicam — Picamera2 only (Raspberry Pi CSI camera on Bookworm)
+    if source == "rpicam":
+        cap = _try_picamera2(WIDTH, HEIGHT, FPS)
+        if cap is not None:
+            return cap
+        log.error("rpicam source requested but Picamera2 failed to open")
+        return None
+
+    # auto — try rpicam first on Linux, then V4L2, then USB
+    if source == "auto" and platform.system() == "Linux":
+        cap = _try_picamera2(WIDTH, HEIGHT, FPS)
+        if cap is not None:
+            return cap
+
     if source in ("csi", "auto"):
-        # Try CSI / libcamera (Raspberry Pi)
         try:
             cap = cv2.VideoCapture(device_index, cv2.CAP_V4L2)
             if cap.isOpened():
@@ -111,7 +200,10 @@ def _open_source(source: str, video_file: str, device_index: int) -> cv2.VideoCa
     return None
 
 
-def _apply_props(cap: cv2.VideoCapture) -> None:
+def _apply_props(cap: cv2.VideoCapture | Picamera2Capture) -> None:
+    if isinstance(cap, Picamera2Capture):
+        # Already configured at init time
+        return
     cap.set(cv2.CAP_PROP_FRAME_WIDTH, WIDTH)
     cap.set(cv2.CAP_PROP_FRAME_HEIGHT, HEIGHT)
     cap.set(cv2.CAP_PROP_FPS, FPS)
@@ -146,7 +238,7 @@ def _capture_loop() -> None:
     RETRY_INTERVAL = 5  # seconds between reconnection attempts
 
     # --- Initial connection (with retries) ---
-    cap_local: cv2.VideoCapture | None = None
+    cap_local: cv2.VideoCapture | Picamera2Capture | None = None
     while cap_local is None:
         cap_local = _open_source(SRC, VIDEO_FILE, DEVICE_INDEX)
         if cap_local is None:
