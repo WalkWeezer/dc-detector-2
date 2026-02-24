@@ -7,6 +7,8 @@ python-multipart==0.0.20
 websockets==14.1
 
 # Video & image processing
+# picamera2 — installed via apt on Raspberry Pi (sudo apt install python3-picamera2)
+#   NOT listed here because it cannot be pip-installed; venv uses --system-site-packages
 opencv-python-headless==4.10.0.84
 numpy>=1.26,<2.0
 Pillow>=10.4,<11.0

@@ -12,9 +12,11 @@ echo "============================================================"
 PYTHON=python3
 
 # Create venv if missing
+# --system-site-packages is required on Raspberry Pi so that the venv can
+# access picamera2 and libcamera which are installed via apt, not pip.
 if [ ! -f "venv/bin/python" ]; then
     echo "Creating virtual environment..."
-    $PYTHON -m venv venv
+    $PYTHON -m venv --system-site-packages venv
 fi
 
 # Activate
