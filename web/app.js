@@ -161,9 +161,12 @@
 
   function resizeCanvas() {
     if (!els.stream || !els.overlay) return;
-    const rect = els.stream.getBoundingClientRect();
-    const w = Math.round(rect.width);
-    const h = Math.round(rect.height);
+    // Canvas must match the container (.video-wrapper), not the <img> element,
+    // because object-fit:contain may leave letterbox bars.
+    const wrapper = els.stream.parentElement;
+    if (!wrapper) return;
+    const w = Math.round(wrapper.clientWidth);
+    const h = Math.round(wrapper.clientHeight);
     if (w > 0 && h > 0 && (els.overlay.width !== w || els.overlay.height !== h)) {
       els.overlay.width = w;
       els.overlay.height = h;
@@ -172,29 +175,46 @@
   }
 
   // ---------------------------------------------------------------------------
-  // Overlay drawing
+  // Overlay drawing — accounts for object-fit:contain letterboxing
   // ---------------------------------------------------------------------------
+
+  /**
+   * Compute the actual rendered image rect inside the container.
+   * object-fit:contain scales uniformly and centers the image.
+   */
+  function getImageLayout() {
+    const cW = els.overlay.width;
+    const cH = els.overlay.height;
+    const natW = els.stream.naturalWidth || 1;
+    const natH = els.stream.naturalHeight || 1;
+
+    const scale = Math.min(cW / natW, cH / natH);
+    const renderW = natW * scale;
+    const renderH = natH * scale;
+    const offsetX = (cW - renderW) / 2;
+    const offsetY = (cH - renderH) / 2;
+
+    return { scale, offsetX, offsetY, renderW, renderH };
+  }
+
   function drawOverlay() {
     if (!overlayCtx) return;
     overlayCtx.clearRect(0, 0, els.overlay.width, els.overlay.height);
     if (!state.tracks.length) return;
 
-    const natW = els.stream.naturalWidth || 1;
-    const natH = els.stream.naturalHeight || 1;
-    const scaleX = els.overlay.width / natW;
-    const scaleY = els.overlay.height / natH;
+    const { scale, offsetX, offsetY } = getImageLayout();
 
     overlayCtx.textBaseline = 'top';
-    overlayCtx.font = `${Math.max(11, Math.round(13 * scaleX))}px 'Segoe UI', sans-serif`;
+    overlayCtx.font = `${Math.max(11, Math.round(13 * scale))}px 'Segoe UI', sans-serif`;
 
     state.tracks.forEach((t) => {
       const bbox = t.bbox;
       if (!bbox) return;
 
-      const bx = bbox.x * scaleX;
-      const by = bbox.y * scaleY;
-      const bw = bbox.w * scaleX;
-      const bh = bbox.h * scaleY;
+      const bx = bbox.x * scale + offsetX;
+      const by = bbox.y * scale + offsetY;
+      const bw = bbox.w * scale;
+      const bh = bbox.h * scale;
       if (!bw || !bh) return;
 
       const isSelected = t.track_id === state.selectedTrackId;
@@ -208,7 +228,7 @@
       const labelText = `${t.class_name || 'obj'} #${t.track_id} ${conf}%`;
       const metrics = overlayCtx.measureText(labelText);
       const tw = metrics.width + 10;
-      const th = Math.max(16, Math.round(18 * scaleY));
+      const th = Math.max(16, Math.round(18 * scale));
       const tx = Math.max(0, Math.min(bx, els.overlay.width - tw));
       const ty = Math.max(0, by - th - 3);
 
