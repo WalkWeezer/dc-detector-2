@@ -106,7 +106,7 @@ _gif_buffers: dict[int, dict] = {}
 # ---------------------------------------------------------------------------
 _runtime_conf = CONFIDENCE
 _runtime_save_conf = CONFIDENCE  # min confidence to persist detection in DB
-_runtime_imgsz = 640
+_runtime_imgsz = int(det_cfg.get("imgsz", 320))  # 320px = 2x faster than 640 on Pi 5
 _runtime_skip = 0            # skip N frames between inferences
 _pending_model: str | None = None  # set by POST /model to trigger hot-swap
 
@@ -120,19 +120,29 @@ _last_inference_ms: float = 0.0
 _current_model_path: str = MODEL_PATH
 
 # ---------------------------------------------------------------------------
-# MJPEG stream reader
+# MJPEG stream reader — threaded, keeps only the latest frame
 # ---------------------------------------------------------------------------
 
-def _read_mjpeg(url: str):
-    """Yield frames from an MJPEG HTTP stream."""
+_latest_frame: np.ndarray | None = None
+_latest_frame_lock = threading.Lock()
+_frame_seq = 0  # monotonic counter so detection loop knows when a new frame arrived
+
+
+def _frame_reader_thread() -> None:
+    """Continuously read MJPEG stream, keeping only the most recent frame.
+
+    This runs in its own thread so the detection loop always gets the freshest
+    frame instead of processing a growing backlog.
+    """
+    global _latest_frame, _frame_seq
     import httpx
 
-    log.info("Connecting to capture stream: %s", url)
+    log.info("Frame reader connecting to: %s", STREAM_URL)
     while True:
         try:
-            with httpx.stream("GET", url, timeout=None) as resp:
+            with httpx.stream("GET", STREAM_URL, timeout=None) as resp:
                 buf = b""
-                for chunk in resp.iter_bytes(4096):
+                for chunk in resp.iter_bytes(8192):
                     buf += chunk
                     while True:
                         a = buf.find(b"\xff\xd8")
@@ -145,7 +155,9 @@ def _read_mjpeg(url: str):
                             np.frombuffer(jpg, dtype=np.uint8), cv2.IMREAD_COLOR
                         )
                         if frame is not None:
-                            yield frame
+                            with _latest_frame_lock:
+                                _latest_frame = frame
+                                _frame_seq += 1
         except Exception as exc:
             log.warning("Stream read error: %s — retrying in 2 s", exc)
             time.sleep(2)
@@ -155,25 +167,49 @@ def _read_mjpeg(url: str):
 # Detection loop
 # ---------------------------------------------------------------------------
 
+def _resolve_model_path(path: str) -> str:
+    """If an NCNN-exported version of the model exists, prefer it."""
+    if path.endswith("_ncnn_model") and os.path.isdir(path):
+        return path
+    ncnn_dir = path.replace(".pt", "_ncnn_model")
+    if os.path.isdir(ncnn_dir):
+        log.info("NCNN model found, using: %s", ncnn_dir)
+        return ncnn_dir
+    return path
+
+
 def _detection_loop() -> None:
     global _annotated_frame, _frame_number, _current_model_path
     global _pending_model, _last_inference_ms
 
     os.makedirs(_session_dir, exist_ok=True)
 
-    # Load YOLO model
+    # Start frame reader thread
+    threading.Thread(target=_frame_reader_thread, daemon=True).start()
+
+    # Load YOLO model (prefer NCNN if available)
     try:
         from ultralytics import YOLO
-        model = YOLO(MODEL_PATH)
-        _current_model_path = MODEL_PATH
-        log.info("Loaded YOLO model: %s", MODEL_PATH)
+        resolved = _resolve_model_path(MODEL_PATH)
+        model = YOLO(resolved)
+        _current_model_path = resolved
+        log.info("Loaded YOLO model: %s", resolved)
     except Exception as exc:
         log.error("Failed to load YOLO model: %s", exc)
         return
 
-    skip_counter = 0
+    last_seq = -1
 
-    for frame in _read_mjpeg(STREAM_URL):
+    while True:
+        # ── Grab the latest frame (skip stale ones) ──
+        with _latest_frame_lock:
+            frame = _latest_frame
+            seq = _frame_seq
+
+        if frame is None or seq == last_seq:
+            time.sleep(0.005)
+            continue
+        last_seq = seq
         _frame_number += 1
 
         # ── Hot-swap model if requested ──
@@ -182,20 +218,12 @@ def _detection_loop() -> None:
             _pending_model = None
             try:
                 from ultralytics import YOLO as _YOLO
-                model = _YOLO(new_path)
-                _current_model_path = new_path
-                log.info("Hot-swapped model to: %s", new_path)
+                resolved = _resolve_model_path(new_path)
+                model = _YOLO(resolved)
+                _current_model_path = resolved
+                log.info("Hot-swapped model to: %s", resolved)
             except Exception as exc:
                 log.error("Model swap failed: %s", exc)
-
-        # ── Skip frames to reduce load ──
-        if _runtime_skip > 0:
-            skip_counter += 1
-            if skip_counter <= _runtime_skip:
-                with _lock:
-                    _annotated_frame = frame.copy()
-                continue
-            skip_counter = 0
 
         ts = datetime.datetime.now().isoformat(timespec="milliseconds")
         t0 = time.perf_counter()
@@ -272,7 +300,7 @@ def _detection_loop() -> None:
                 track_info["gif_url"] = f"/media/{gif_rel}" if gif_rel else ""
                 current_tracks[track_id] = track_info
 
-        # Draw annotations
+        # Draw annotations only when stream/ws clients might need them
         annotated = results[0].plot() if results else frame.copy()
 
         with _lock:
@@ -288,11 +316,6 @@ def _detection_loop() -> None:
                 existing = _track_detections.get(tid)
                 if existing is None or t["confidence"] > existing["confidence"]:
                     _track_detections[tid] = t
-
-        # Throttle to avoid overload
-        time.sleep(0.001)
-
-    log.warning("Detection loop ended (stream closed)")
 
 
 def _safe_crop(frame: np.ndarray, x1: int, y1: int, x2: int, y2: int) -> np.ndarray:
@@ -336,18 +359,23 @@ def _buffer_gif_frame(
     buf["frames"].append(crop_rgb)
 
     if now - buf["start"] >= GIF_DURATION and len(buf["frames"]) >= 5:
-        # Write GIF
-        try:
-            # Sample ~20 frames max for reasonable file size
-            frames = buf["frames"]
-            step = max(1, len(frames) // 20)
-            sampled = frames[::step]
-            imageio.mimsave(buf["path"], sampled, duration=0.25, loop=0)
-            log.info("Saved GIF: %s (%d frames)", buf["path"], len(sampled))
-        except Exception as exc:
-            log.error("GIF save failed: %s", exc)
+        # Write GIF in background thread to avoid blocking inference
+        frames = buf["frames"]
+        path = buf["path"]
         buf["done"] = True
         buf["frames"] = []  # free memory
+        threading.Thread(target=_write_gif, args=(path, frames), daemon=True).start()
+
+
+def _write_gif(path: str, frames: list) -> None:
+    """Encode and save GIF in a background thread."""
+    try:
+        step = max(1, len(frames) // 20)
+        sampled = frames[::step]
+        imageio.mimsave(path, sampled, duration=0.25, loop=0)
+        log.info("Saved GIF: %s (%d frames)", path, len(sampled))
+    except Exception as exc:
+        log.error("GIF save failed: %s", exc)
 
 
 # ---------------------------------------------------------------------------
@@ -489,11 +517,22 @@ async def set_config(request: Request):
 async def list_models():
     models = []
     if os.path.isdir(MODELS_DIR):
+        # .pt, .onnx, .engine files
         for ext in ("*.pt", "*.onnx", "*.engine"):
             for fp in _glob.glob(os.path.join(MODELS_DIR, ext)):
                 name = os.path.basename(fp)
                 size_mb = os.path.getsize(fp) / (1024 * 1024)
-                models.append({"name": name, "path": fp, "size_mb": round(size_mb, 1)})
+                models.append({"name": name, "path": fp, "size_mb": round(size_mb, 1),
+                                "format": ext.replace("*", "").lstrip(".")})
+        # NCNN model directories
+        for fp in _glob.glob(os.path.join(MODELS_DIR, "*_ncnn_model")):
+            if os.path.isdir(fp):
+                name = os.path.basename(fp)
+                total = sum(os.path.getsize(os.path.join(dp, fn))
+                            for dp, _, fns in os.walk(fp) for fn in fns)
+                models.append({"name": name, "path": fp,
+                                "size_mb": round(total / (1024 * 1024), 1),
+                                "format": "ncnn"})
     return JSONResponse({
         "current": os.path.basename(_current_model_path),
         "models": models,
@@ -506,7 +545,7 @@ async def switch_model(request: Request):
     body = await request.json()
     name = body.get("name", "")
     path = os.path.join(MODELS_DIR, name)
-    if not os.path.isfile(path):
+    if not os.path.isfile(path) and not os.path.isdir(path):
         return JSONResponse({"error": f"Model not found: {name}"}, status_code=404)
     _pending_model = path
     log.info("Model switch requested: %s", path)

@@ -28,10 +28,15 @@ capture:
 # Object detection
 # ---------------------------------------------------------------------------
 detection:
-  # YOLO model path (.pt or .onnx)
-  model_path: "./models/yolov8n.pt"
+  # YOLO model path (.pt, .onnx, or NCNN directory)
+  # If an *_ncnn_model directory exists next to the .pt file, it is used automatically
+  model_path: "./models/yolo11n.pt"
   # Confidence threshold
   confidence: 0.5
+  # Input image size for YOLO (smaller = faster, larger = more accurate)
+  #   320 → ~25-30 FPS on Pi 5 (NCNN)
+  #   640 → ~10-15 FPS on Pi 5 (NCNN)
+  imgsz: 320
   # URL of the capture MJPEG stream (filled automatically by launcher)
   stream_url: "http://localhost:8001/stream"
   # Port for detection API

@@ -221,14 +221,17 @@ def _send_track_image(track_id: int, httpx) -> None:
         log.info("GET_IMG track %d: %d bytes (120x90 q15)", track_id, len(data))
 
         # Send as pre-chunked IMG: lines via serial
+        # Delay must be >= LoRa TX time (~100-300ms at SF7/BW125) to avoid UART overflow
         total_chunks = (len(data) + IMG_CHUNK_BYTES - 1) // IMG_CHUNK_BYTES
+        log.info("GET_IMG: sending %d chunks (%d bytes), ETA ~%ds",
+                 total_chunks, len(data), total_chunks * 300 // 1000)
         for c in range(total_chunks):
             start = c * IMG_CHUNK_BYTES
             end = min(start + IMG_CHUNK_BYTES, len(data))
             hex_data = data[start:end].hex().upper()
             line = f"IMG:{c}:{total_chunks}:{hex_data}\n"
             _serial_port.write(line.encode("utf-8"))
-            time.sleep(0.05)  # let ESP32 process each chunk
+            time.sleep(0.3)  # wait for ESP32 to relay chunk via LoRa
         log.info("GET_IMG: sent %d chunks to ESP32", total_chunks)
 
     except Exception as exc:
