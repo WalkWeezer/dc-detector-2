@@ -138,47 +138,31 @@ _last_inference_ms: float = 0.0
 _current_model_path: str = MODEL_PATH
 
 # ---------------------------------------------------------------------------
-# MJPEG stream reader — threaded, keeps only the latest frame
+# Frame grabber — polls /frame for the latest image (no MJPEG buffering)
 # ---------------------------------------------------------------------------
 
-_latest_frame: np.ndarray | None = None
-_latest_frame_lock = threading.Lock()
-_frame_seq = 0  # monotonic counter so detection loop knows when a new frame arrived
+# Derive base URL from stream URL:  http://host:port/stream → http://host:port
+_CAPTURE_BASE = STREAM_URL.rsplit("/", 1)[0]
+_FRAME_URL = f"{_CAPTURE_BASE}/frame"
+
+import httpx as _httpx
+_http_client = _httpx.Client(timeout=2.0)
 
 
-def _frame_reader_thread() -> None:
-    """Continuously read MJPEG stream, keeping only the most recent frame.
+def _grab_frame() -> np.ndarray | None:
+    """Fetch the latest frame from the capture service.
 
-    This runs in its own thread so the detection loop always gets the freshest
-    frame instead of processing a growing backlog.
+    Uses a simple GET /frame request — always returns the most current image
+    with zero buffering lag.  The detection loop controls its own pace.
     """
-    global _latest_frame, _frame_seq
-    import httpx
-
-    log.info("Frame reader connecting to: %s", STREAM_URL)
-    while True:
-        try:
-            with httpx.stream("GET", STREAM_URL, timeout=None) as resp:
-                buf = b""
-                for chunk in resp.iter_bytes(8192):
-                    buf += chunk
-                    while True:
-                        a = buf.find(b"\xff\xd8")
-                        b = buf.find(b"\xff\xd9", a + 2 if a >= 0 else 0)
-                        if a < 0 or b < 0:
-                            break
-                        jpg = buf[a : b + 2]
-                        buf = buf[b + 2 :]
-                        frame = cv2.imdecode(
-                            np.frombuffer(jpg, dtype=np.uint8), cv2.IMREAD_COLOR
-                        )
-                        if frame is not None:
-                            with _latest_frame_lock:
-                                _latest_frame = frame
-                                _frame_seq += 1
-        except Exception as exc:
-            log.warning("Stream read error: %s — retrying in 2 s", exc)
-            time.sleep(2)
+    try:
+        resp = _http_client.get(_FRAME_URL)
+        if resp.status_code != 200:
+            return None
+        arr = np.frombuffer(resp.content, dtype=np.uint8)
+        return cv2.imdecode(arr, cv2.IMREAD_COLOR)
+    except Exception:
+        return None
 
 
 # ---------------------------------------------------------------------------
@@ -247,11 +231,23 @@ def _stop_det_recording() -> str | None:
 # ---------------------------------------------------------------------------
 
 def _resolve_model_path(path: str) -> str:
-    """If an NCNN-exported version of the model exists, prefer it."""
+    """If an NCNN-exported version of the model exists, prefer it on Linux.
+
+    NCNN is optimised for ARM (Raspberry Pi) and has compatibility issues
+    with Python 3.13+ on Windows, so we only auto-select it on Linux.
+    """
+    import platform as _plat
+    is_linux = _plat.system() == "Linux"
+
     if path.endswith("_ncnn_model") and os.path.isdir(path):
-        return path
+        if is_linux:
+            return path
+        log.warning("NCNN model requested but skipped on %s — falling back to .pt", _plat.system())
+        pt_path = path.replace("_ncnn_model", ".pt")
+        return pt_path if os.path.isfile(pt_path) else path
+
     ncnn_dir = path.replace(".pt", "_ncnn_model")
-    if os.path.isdir(ncnn_dir):
+    if is_linux and os.path.isdir(ncnn_dir):
         log.info("NCNN model found, using: %s", ncnn_dir)
         return ncnn_dir
     return path
@@ -263,32 +259,36 @@ def _detection_loop() -> None:
 
     os.makedirs(_session_dir, exist_ok=True)
 
-    # Start frame reader thread
-    threading.Thread(target=_frame_reader_thread, daemon=True).start()
+    # Wait for capture service to become available
+    log.info("Waiting for capture service at %s ...", _FRAME_URL)
+    while _grab_frame() is None:
+        time.sleep(1)
+    log.info("Capture service is ready")
 
-    # Load YOLO model (prefer NCNN if available)
-    try:
-        from ultralytics import YOLO
-        resolved = _resolve_model_path(MODEL_PATH)
-        model = YOLO(resolved)
-        _current_model_path = resolved
-        log.info("Loaded YOLO model: %s", resolved)
-    except Exception as exc:
-        log.error("Failed to load YOLO model: %s", exc)
+    # Load YOLO model (prefer NCNN if available, fallback to .pt)
+    from ultralytics import YOLO
+    resolved = _resolve_model_path(MODEL_PATH)
+    model = None
+    for attempt_path in [resolved, MODEL_PATH]:
+        try:
+            model = YOLO(attempt_path)
+            _current_model_path = attempt_path
+            log.info("Loaded YOLO model: %s", attempt_path)
+            break
+        except Exception as exc:
+            log.warning("Failed to load model %s: %s", attempt_path, exc)
+            if attempt_path != MODEL_PATH:
+                log.info("Falling back to original model: %s", MODEL_PATH)
+    if model is None:
+        log.error("All model load attempts failed")
         return
 
-    last_seq = -1
-
     while True:
-        # ── Grab the latest frame (skip stale ones) ──
-        with _latest_frame_lock:
-            frame = _latest_frame
-            seq = _frame_seq
-
-        if frame is None or seq == last_seq:
-            time.sleep(0.005)
+        # ── Always grab the freshest frame from capture ──
+        frame = _grab_frame()
+        if frame is None:
+            time.sleep(0.1)
             continue
-        last_seq = seq
         _frame_number += 1
 
         # ── Detection paused — clear tracks, pass frame through ──
@@ -616,6 +616,8 @@ async def set_config(request: Request):
 
 @app.get("/models")
 async def list_models():
+    import platform as _plat
+    is_linux = _plat.system() == "Linux"
     models = []
     if os.path.isdir(MODELS_DIR):
         # .pt, .onnx, .engine files
@@ -625,15 +627,16 @@ async def list_models():
                 size_mb = os.path.getsize(fp) / (1024 * 1024)
                 models.append({"name": name, "path": fp, "size_mb": round(size_mb, 1),
                                 "format": ext.replace("*", "").lstrip(".")})
-        # NCNN model directories
-        for fp in _glob.glob(os.path.join(MODELS_DIR, "*_ncnn_model")):
-            if os.path.isdir(fp):
-                name = os.path.basename(fp)
-                total = sum(os.path.getsize(os.path.join(dp, fn))
-                            for dp, _, fns in os.walk(fp) for fn in fns)
-                models.append({"name": name, "path": fp,
-                                "size_mb": round(total / (1024 * 1024), 1),
-                                "format": "ncnn"})
+        # NCNN model directories (only on Linux — broken on Windows/Python 3.13+)
+        if is_linux:
+            for fp in _glob.glob(os.path.join(MODELS_DIR, "*_ncnn_model")):
+                if os.path.isdir(fp):
+                    name = os.path.basename(fp)
+                    total = sum(os.path.getsize(os.path.join(dp, fn))
+                                for dp, _, fns in os.walk(fp) for fn in fns)
+                    models.append({"name": name, "path": fp,
+                                    "size_mb": round(total / (1024 * 1024), 1),
+                                    "format": "ncnn"})
     return JSONResponse({
         "current": os.path.basename(_current_model_path),
         "models": models,

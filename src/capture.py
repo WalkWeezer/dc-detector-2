@@ -26,7 +26,7 @@ import platform
 import cv2
 import numpy as np
 from fastapi import FastAPI, Request, WebSocket, WebSocketDisconnect
-from fastapi.responses import JSONResponse, StreamingResponse, FileResponse
+from fastapi.responses import JSONResponse, Response, StreamingResponse, FileResponse
 from pydantic import BaseModel
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -519,13 +519,10 @@ async def single_frame():
         frame = _latest_frame
     if frame is None:
         return JSONResponse({"error": "no frame available"}, status_code=503)
-    ok, jpeg = cv2.imencode(".jpg", frame)
+    ok, jpeg = cv2.imencode(".jpg", frame, [cv2.IMWRITE_JPEG_QUALITY, JPEG_QUALITY])
     if not ok:
         return JSONResponse({"error": "encode failed"}, status_code=500)
-    return StreamingResponse(
-        iter([jpeg.tobytes()]),
-        media_type="image/jpeg",
-    )
+    return Response(content=jpeg.tobytes(), media_type="image/jpeg")
 
 
 @app.post("/recording/start")

@@ -439,7 +439,7 @@
   // ---------------------------------------------------------------------------
   // Model & Config (Detection tab)
   // ---------------------------------------------------------------------------
-  async function loadModels() {
+  async function loadModels(retries = 3) {
     try {
       const data = await fetchJSON(`${origin(ports.det)}/models`);
       if (!els.modelSelect) return;
@@ -455,8 +455,12 @@
         const opt = document.createElement('option');
         opt.textContent = 'Модели не найдены';
         els.modelSelect.appendChild(opt);
+        if (retries > 0) setTimeout(() => loadModels(retries - 1), 3000);
       }
-    } catch { /* service may not be ready */ }
+    } catch {
+      // Service may not be ready — retry
+      if (retries > 0) setTimeout(() => loadModels(retries - 1), 3000);
+    }
   }
 
   async function switchModel() {
