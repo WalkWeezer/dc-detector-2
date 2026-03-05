@@ -11,7 +11,8 @@
       "Bash(cmd /c \"taskkill /F /PID 31540 & taskkill /F /PID 34584 & taskkill /F /PID 31676 & taskkill /F /PID 34732 & taskkill /F /PID 32852\")",
       "Bash(ls \"c:\\\\Users\\\\borov\\\\source\\\\projects\\\\DC-Detector-v0.2\\\\models\"\" 2>nul || echo \"Directory does not exist or is empty \")",
       "Bash(pio run:*)",
-      "Bash(platformio run:*)"
+      "Bash(platformio run:*)",
+      "Bash(ls \"c:\\\\Users\\\\borov\\\\source\\\\projects\\\\DC-Detector-v0.2\\\\data\\\\recordings\"\" 2>/dev/null || echo \"directory not found or empty \")"
     ]
   }
 }

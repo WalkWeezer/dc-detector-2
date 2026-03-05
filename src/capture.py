@@ -25,7 +25,7 @@ import platform
 
 import cv2
 import numpy as np
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, Request, WebSocket, WebSocketDisconnect
 from fastapi.responses import JSONResponse, StreamingResponse, FileResponse
 from pydantic import BaseModel
 
@@ -316,8 +316,12 @@ def _capture_loop() -> None:
 
         with _lock:
             _latest_frame = frame
-            if _recording and _video_writer is not None:
-                _video_writer.write(frame)
+            rec_active = _recording
+            writer = _video_writer
+
+        # Write outside lock so disk I/O doesn't block the MJPEG generator
+        if rec_active and writer is not None:
+            writer.write(frame)
 
         # Sleep only for the remaining time to hit target FPS.
         # cap.read() already blocks for live cameras, so this avoids
@@ -332,16 +336,16 @@ def _capture_loop() -> None:
 # Recording helpers
 # ---------------------------------------------------------------------------
 
-def _start_recording_internal() -> str:
+def _start_recording_internal(rec_id: str | None = None) -> str:
     global _recording, _video_writer, _recording_path
     os.makedirs(REC_DIR, exist_ok=True)
-    ts = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+    ts = rec_id or datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
     ext = ".avi"
     _recording_path = os.path.join(REC_DIR, f"rec_{ts}{ext}")
     fourcc = cv2.VideoWriter_fourcc(*REC_CODEC)
     # Use actual frame size (not config) so recording matches the stream
-    with _lock:
-        f = _latest_frame
+    # NOTE: caller holds _lock (endpoint) or is the capture thread — no extra lock needed
+    f = _latest_frame
     rec_w = f.shape[1] if f is not None else WIDTH
     rec_h = f.shape[0] if f is not None else HEIGHT
     _video_writer = cv2.VideoWriter(_recording_path, fourcc, _actual_fps, (rec_w, rec_h))
@@ -441,11 +445,20 @@ async def single_frame():
 
 
 @app.post("/recording/start")
-async def recording_start():
+async def recording_start(request: Request):
+    body = {}
+    try:
+        body = await request.json()
+    except Exception:
+        pass
+    rec_id = body.get("id") if isinstance(body, dict) else None
     with _lock:
-        if _recording:
+        if _recording and rec_id:
+            # Restart with the shared ID so timestamps match the detector recording
+            _stop_recording_internal()
+        elif _recording:
             return JSONResponse({"status": "already recording", "path": _recording_path})
-        path = _start_recording_internal()
+        path = _start_recording_internal(rec_id=rec_id)
     await _broadcast({"event": "recording_started", "path": path})
     return JSONResponse({"status": "started", "path": path})
 
@@ -563,6 +576,7 @@ async def ws_endpoint(ws: WebSocket):
                 status = {
                     "event": "status",
                     "recording": _recording,
+                    "recording_path": _recording_path,
                     "playback": _playback_mode,
                     "frame_available": _latest_frame is not None,
                 }

@@ -10,20 +10,33 @@
   <div class="page">
     <main class="main-grid">
 
-      <!-- ====== Left: Video + Status Strip ====== -->
+      <!-- ====== Видео + статус ====== -->
       <div class="video-col">
         <div class="video-wrapper">
-          <img id="stream" alt="Video stream" />
+          <img id="stream" alt="Видеопоток" />
           <canvas id="overlay"></canvas>
+          <!-- Тосты (левый нижний угол видео) -->
+          <div id="toast-container" class="toast-container"></div>
+          <!-- Индикатор записи -->
+          <div class="rec-hud">
+            <div class="rec-hud-indicator" id="rec-hud-indicator">
+              <span class="rec-hud-dot" id="rec-dot"></span>
+              <span class="rec-hud-label" id="rec-status">СТОП</span>
+            </div>
+            <div class="rec-hud-controls">
+              <button id="rec-start-btn" class="rec-hud-btn rec-hud-start" title="Начать запись">&#9679;</button>
+              <button id="rec-stop-btn" class="rec-hud-btn rec-hud-stop" title="Остановить запись" disabled>&#9632;</button>
+            </div>
+          </div>
         </div>
 
         <div class="status-strip">
           <div class="ss-item">
-            <span class="ss-label">Status</span>
-            <strong id="status-indicator">Connecting...</strong>
+            <span class="ss-label">Статус</span>
+            <strong id="status-indicator">Подключение...</strong>
           </div>
           <div class="ss-item">
-            <span class="ss-label">Tracks</span>
+            <span class="ss-label">Треки</span>
             <strong id="track-count">&mdash;</strong>
           </div>
           <div class="ss-item">
@@ -43,41 +56,42 @@
         <p id="error-message" class="status-error"></p>
       </div>
 
-      <!-- ====== Right: Sidebar Tabs ====== -->
+      <!-- ====== Боковая панель ====== -->
       <aside class="sidebar">
         <nav class="sidebar-tabs" role="tablist">
-          <button class="tab-btn active" data-tab="detection" role="tab">Detection</button>
-          <button class="tab-btn" data-tab="telemetry" role="tab">Telemetry</button>
+          <button class="tab-btn active" data-tab="detection" role="tab">Детекция</button>
+          <button class="tab-btn" data-tab="telemetry" role="tab">Телеметрия</button>
           <button class="tab-btn" data-tab="lora" role="tab">LoRa</button>
-          <button class="tab-btn" data-tab="db" role="tab">DB</button>
+          <button class="tab-btn" data-tab="sessions" role="tab">Обнаружения</button>
+          <button class="tab-btn" data-tab="recordings" role="tab">Записи</button>
         </nav>
 
         <div class="sidebar-content">
 
-          <!-- ── Tab 1: Detection ── -->
+          <!-- ── Вкладка: Детекция ── -->
           <div id="tab-detection" class="tab-panel active" role="tabpanel">
 
-            <!-- Model & Config -->
+            <!-- Модель и настройки -->
             <section class="card">
-              <header><h2>Model & Config</h2></header>
+              <header><h2>Модель и настройки</h2></header>
               <div class="form-col">
                 <div class="form-row">
-                  <label class="form-label">Model</label>
+                  <label class="form-label">Модель</label>
                   <div class="input-row">
                     <select id="model-select"></select>
-                    <button id="model-switch-btn" class="sm">Switch</button>
+                    <button id="model-switch-btn" class="sm">Сменить</button>
                   </div>
                 </div>
                 <div class="slider-field">
-                  <div class="slider-label"><span>Confidence</span><span class="slider-value" id="conf-val">0.50</span></div>
+                  <div class="slider-label"><span>Порог уверенности</span><span class="slider-value" id="conf-val">0.50</span></div>
                   <input type="range" id="conf-slider" min="5" max="100" value="50" />
                 </div>
                 <div class="slider-field">
-                  <div class="slider-label"><span>Save to DB</span><span class="slider-value" id="save-conf-val">0.50</span></div>
+                  <div class="slider-label"><span>Порог сохранения</span><span class="slider-value" id="save-conf-val">0.50</span></div>
                   <input type="range" id="save-conf-slider" min="5" max="100" value="50" />
                 </div>
                 <div class="form-row">
-                  <label class="form-label">Input Size</label>
+                  <label class="form-label">Размер входа</label>
                   <select id="imgsz-select">
                     <option value="160">160</option>
                     <option value="320">320</option>
@@ -88,125 +102,108 @@
                   </select>
                 </div>
                 <div class="slider-field">
-                  <div class="slider-label"><span>Skip Frames</span><span class="slider-value" id="skip-val">0</span></div>
+                  <div class="slider-label"><span>Пропуск кадров</span><span class="slider-value" id="skip-val">0</span></div>
                   <input type="range" id="skip-slider" min="0" max="30" value="0" />
                 </div>
-                <button id="apply-config-btn" class="accent full-w">Apply</button>
+                <button id="apply-config-btn" class="accent full-w">Применить</button>
               </div>
             </section>
 
-            <!-- Metrics -->
+            <!-- Метрики -->
             <section class="card">
-              <header><h2>Performance</h2></header>
+              <header><h2>Производительность</h2></header>
               <div class="metrics-grid">
                 <div class="metric"><span class="m-label">FPS</span><span class="m-val" id="m-fps">&mdash;</span></div>
-                <div class="metric"><span class="m-label">Inference</span><span class="m-val" id="m-infer">&mdash;</span></div>
-                <div class="metric"><span class="m-label">Avg ms</span><span class="m-val" id="m-avg">&mdash;</span></div>
-                <div class="metric"><span class="m-label">Frame #</span><span class="m-val" id="m-frame">&mdash;</span></div>
-                <div class="metric"><span class="m-label">Tracks</span><span class="m-val" id="m-tracks">&mdash;</span></div>
-                <div class="metric"><span class="m-label">Total Det.</span><span class="m-val" id="m-total">&mdash;</span></div>
+                <div class="metric"><span class="m-label">Инференс</span><span class="m-val" id="m-infer">&mdash;</span></div>
+                <div class="metric"><span class="m-label">Средн. мс</span><span class="m-val" id="m-avg">&mdash;</span></div>
+                <div class="metric"><span class="m-label">Кадр #</span><span class="m-val" id="m-frame">&mdash;</span></div>
+                <div class="metric"><span class="m-label">Треки</span><span class="m-val" id="m-tracks">&mdash;</span></div>
+                <div class="metric"><span class="m-label">Всего дет.</span><span class="m-val" id="m-total">&mdash;</span></div>
               </div>
             </section>
 
-            <!-- Active Tracks -->
+            <!-- Активные треки -->
             <section class="card">
-              <header><h2>Active Tracks</h2><span id="tracker-refresh" class="link-btn">Refresh</span></header>
-              <div id="tracker-list" class="tracker-list empty-state">No active tracks</div>
+              <header><h2>Активные треки</h2><span id="tracker-refresh" class="link-btn">Обновить</span></header>
+              <div id="tracker-list" class="tracker-list empty-state">Нет активных треков</div>
             </section>
           </div>
 
-          <!-- ── Tab 2: Telemetry ── -->
+          <!-- ── Вкладка: Телеметрия ── -->
           <div id="tab-telemetry" class="tab-panel" role="tabpanel">
             <div class="tgrid">
               <div class="tcard">
                 <h3>GPS</h3>
-                <div class="row"><span class="lbl">Lat</span><span class="val" id="t-lat">&mdash;</span></div>
-                <div class="row"><span class="lbl">Lon</span><span class="val" id="t-lon">&mdash;</span></div>
-                <div class="row"><span class="lbl">Alt MSL</span><span class="val" id="t-alt-msl">&mdash;</span></div>
-                <div class="row"><span class="lbl">Alt REL</span><span class="val" id="t-alt-rel">&mdash;</span></div>
-                <div class="row"><span class="lbl">Fix</span><span class="val" id="t-fix">&mdash;</span></div>
-                <div class="row"><span class="lbl">Sats</span><span class="val" id="t-sats">&mdash;</span></div>
+                <div class="row"><span class="lbl">Широта</span><span class="val" id="t-lat">&mdash;</span></div>
+                <div class="row"><span class="lbl">Долгота</span><span class="val" id="t-lon">&mdash;</span></div>
+                <div class="row"><span class="lbl">Выс. MSL</span><span class="val" id="t-alt-msl">&mdash;</span></div>
+                <div class="row"><span class="lbl">Выс. отн.</span><span class="val" id="t-alt-rel">&mdash;</span></div>
+                <div class="row"><span class="lbl">Фикс.</span><span class="val" id="t-fix">&mdash;</span></div>
+                <div class="row"><span class="lbl">Спутники</span><span class="val" id="t-sats">&mdash;</span></div>
                 <div class="row"><span class="lbl">HDOP</span><span class="val" id="t-hdop">&mdash;</span></div>
               </div>
               <div class="tcard">
-                <h3>Flight</h3>
-                <div class="row"><span class="lbl">Mode</span><span id="t-mode"><span class="mode-badge">&mdash;</span></span></div>
-                <div class="row"><span class="lbl">Armed</span><span id="t-armed"><span class="armed-badge">&mdash;</span></span></div>
-                <div class="row"><span class="lbl">GndSpeed</span><span class="val" id="t-speed">&mdash;</span></div>
-                <div class="row"><span class="lbl">AirSpeed</span><span class="val" id="t-airspeed">&mdash;</span></div>
-                <div class="row"><span class="lbl">Heading</span><span class="val" id="t-heading">&mdash;</span></div>
-                <div class="row"><span class="lbl">Climb</span><span class="val" id="t-climb">&mdash;</span></div>
-                <div class="row"><span class="lbl">Throttle</span><span class="val" id="t-throttle">&mdash;</span></div>
+                <h3>Полёт</h3>
+                <div class="row"><span class="lbl">Режим</span><span id="t-mode"><span class="mode-badge">&mdash;</span></span></div>
+                <div class="row"><span class="lbl">Арм.</span><span id="t-armed"><span class="armed-badge">&mdash;</span></span></div>
+                <div class="row"><span class="lbl">Скор. земл.</span><span class="val" id="t-speed">&mdash;</span></div>
+                <div class="row"><span class="lbl">Скор. возд.</span><span class="val" id="t-airspeed">&mdash;</span></div>
+                <div class="row"><span class="lbl">Курс</span><span class="val" id="t-heading">&mdash;</span></div>
+                <div class="row"><span class="lbl">Набор выс.</span><span class="val" id="t-climb">&mdash;</span></div>
+                <div class="row"><span class="lbl">Газ</span><span class="val" id="t-throttle">&mdash;</span></div>
               </div>
               <div class="tcard">
-                <h3>Battery</h3>
-                <div class="row"><span class="lbl">Voltage</span><span class="val" id="t-bat-v">&mdash;</span></div>
-                <div class="row"><span class="lbl">Current</span><span class="val" id="t-bat-a">&mdash;</span></div>
-                <div class="row"><span class="lbl">Remaining</span><span class="val" id="t-bat-pct">&mdash;</span></div>
+                <h3>Батарея</h3>
+                <div class="row"><span class="lbl">Напряжение</span><span class="val" id="t-bat-v">&mdash;</span></div>
+                <div class="row"><span class="lbl">Ток</span><span class="val" id="t-bat-a">&mdash;</span></div>
+                <div class="row"><span class="lbl">Остаток</span><span class="val" id="t-bat-pct">&mdash;</span></div>
                 <div class="bat-bar-wrap"><div class="bat-bar high" id="t-bat-bar" style="width:0%"></div></div>
               </div>
               <div class="tcard">
-                <h3>Attitude</h3>
-                <div class="row"><span class="lbl">Roll</span><span class="val" id="t-roll">&mdash;</span></div>
-                <div class="row"><span class="lbl">Pitch</span><span class="val" id="t-pitch">&mdash;</span></div>
-                <div class="row"><span class="lbl">Yaw</span><span class="val" id="t-yaw">&mdash;</span></div>
+                <h3>Ориентация</h3>
+                <div class="row"><span class="lbl">Крен</span><span class="val" id="t-roll">&mdash;</span></div>
+                <div class="row"><span class="lbl">Тангаж</span><span class="val" id="t-pitch">&mdash;</span></div>
+                <div class="row"><span class="lbl">Рыскание</span><span class="val" id="t-yaw">&mdash;</span></div>
               </div>
             </div>
           </div>
 
-          <!-- ── Tab 3: LoRa ── -->
+          <!-- ── Вкладка: LoRa ── -->
           <div id="tab-lora" class="tab-panel" role="tabpanel">
             <section class="card">
               <header>
-                <h2>LoRa Link</h2>
-                <span id="lora-conn-label" class="status-label">Disconnected</span>
+                <h2>LoRa связь</h2>
+                <span id="lora-conn-label" class="status-label">Отключено</span>
               </header>
               <div class="lora-stats" id="lora-stats"></div>
               <div class="lora-controls">
-                <input id="lora-text" type="text" placeholder="Message..." />
-                <button id="lora-send-btn" type="button">Send</button>
+                <input id="lora-text" type="text" placeholder="Сообщение..." />
+                <button id="lora-send-btn" type="button">Отправить</button>
               </div>
             </section>
             <section class="card flex-1">
-              <header><h2>Message Log</h2><span id="lora-clear-btn" class="link-btn">Clear</span></header>
+              <header><h2>Журнал сообщений</h2><span id="lora-clear-btn" class="link-btn">Очистить</span></header>
               <div id="lora-log" class="lora-log"></div>
             </section>
           </div>
 
-          <!-- ── Tab 4: DB (Recordings & Detections) ── -->
-          <div id="tab-db" class="tab-panel" role="tabpanel">
-
-            <!-- Shared filter bar -->
+          <!-- ── Вкладка: Обнаружения ── -->
+          <div id="tab-sessions" class="tab-panel tab-panel-fill" role="tabpanel">
             <div class="filter-bar">
               <select id="db-sort">
-                <option value="date-desc">Newest first</option>
-                <option value="date-asc">Oldest first</option>
-                <option value="det-desc">Most detections</option>
+                <option value="date-desc">Сначала новые</option>
+                <option value="date-asc">Сначала старые</option>
+                <option value="det-desc">Больше детекций</option>
               </select>
-              <input id="sess-class-filter" type="text" placeholder="Filter by class..." />
-              <span id="db-refresh-btn" class="link-btn">Refresh</span>
+              <input id="sess-class-filter" type="text" placeholder="Фильтр по классу..." />
+              <span id="db-refresh-btn" class="link-btn">Обновить</span>
             </div>
+            <div id="sess-list" class="sess-list fill-list">Загрузка...</div>
+          </div>
 
-            <!-- Recordings -->
-            <section class="card">
-              <header>
-                <h2>Recordings</h2>
-                <div class="header-actions">
-                  <span class="rec-indicator"><span class="rec-dot" id="rec-dot"></span><span id="rec-status">Idle</span></span>
-                  <button id="rec-start-btn" class="sm accent">REC</button>
-                  <button id="rec-stop-btn" class="sm danger" disabled>STOP</button>
-                </div>
-              </header>
-              <div id="rec-list" class="rec-list">Loading...</div>
-            </section>
-
-            <!-- Detections -->
-            <section class="card">
-              <header>
-                <h2>Detection Sessions</h2>
-              </header>
-              <div id="sess-list" class="sess-list">Loading...</div>
-            </section>
+          <!-- ── Вкладка: Записи ── -->
+          <div id="tab-recordings" class="tab-panel tab-panel-fill" role="tabpanel">
+            <div id="rec-list" class="rec-list fill-list">Загрузка...</div>
           </div>
 
         </div>
@@ -214,15 +211,15 @@
 
     </main>
 
-    <!-- ====== Floating WS Log Popup ====== -->
-    <button id="log-toggle" class="log-toggle" title="WebSocket Logs">LOG</button>
+    <!-- ====== Всплывающие логи ====== -->
+    <button id="log-toggle" class="log-toggle" title="Логи WebSocket">LOG</button>
     <div id="log-popup" class="log-popup hidden">
       <div class="log-popup-header">
-        <span>WebSocket Logs</span>
-        <button id="log-popup-close" class="log-popup-close" aria-label="Close">&times;</button>
+        <span>Логи WebSocket</span>
+        <button id="log-popup-close" class="log-popup-close" aria-label="Закрыть">&times;</button>
       </div>
       <div class="log-popup-body">
-        <h4 class="ws-section-title">Detection</h4>
+        <h4 class="ws-section-title">Детекция</h4>
         <pre class="log" id="ws-det-log"></pre>
         <h4 class="ws-section-title">MAVLink</h4>
         <pre class="log" id="ws-mav-log"></pre>
@@ -232,17 +229,17 @@
     </div>
   </div>
 
-  <!-- ====== Modal for detection preview ====== -->
+  <!-- ====== Модальное окно детекции ====== -->
   <div id="det-modal" class="modal hidden" aria-hidden="true">
     <div class="modal-backdrop" id="modal-backdrop"></div>
     <div class="modal-dialog" role="dialog" aria-modal="true">
       <div class="modal-body">
-        <button class="modal-close" id="modal-close" aria-label="Close">&times;</button>
+        <button class="modal-close" id="modal-close" aria-label="Закрыть">&times;</button>
         <div class="modal-media">
-          <img id="modal-image" alt="Detection" />
+          <img id="modal-image" alt="Детекция" />
         </div>
         <div class="modal-meta">
-          <h3>Detection Details</h3>
+          <h3>Детали обнаружения</h3>
           <dl id="modal-dl"></dl>
         </div>
       </div>

@@ -20,7 +20,8 @@ capture:
   fps: 30
   # Port for the MJPEG / API server
   port: 8001
-  # Recording settings
+  # Recording settings (raw video without detection boxes)
+  # Detector service also writes annotated video (det_*.avi) to the same directory
   recording:
     enabled: true
     directory: "./data/recordings"

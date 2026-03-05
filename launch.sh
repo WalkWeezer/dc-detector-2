@@ -9,6 +9,15 @@ echo "============================================================"
 echo " DC-Detector v0.2 — Linux / Raspberry Pi launcher"
 echo "============================================================"
 
+# Auto-update from git repository
+if git rev-parse --is-inside-work-tree &>/dev/null 2>&1; then
+    echo "Updating repository..."
+    git stash
+    git pull
+    echo "Repository updated."
+    echo ""
+fi
+
 PYTHON=python3
 
 # Create venv if missing

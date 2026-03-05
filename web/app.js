@@ -1,5 +1,5 @@
-// DC-Detector v0.2 — Frontend Application
-// 4 tabs: Detection, Telemetry, LoRa, DB
+// DC-Detector v0.2 — Веб-интерфейс
+// Вкладки: Детекция, Телеметрия, LoRa, Обнаружения, Записи
 (() => {
   'use strict';
 
@@ -36,7 +36,8 @@
     loraText: $('lora-text'), loraSendBtn: $('lora-send-btn'),
     loraLog: $('lora-log'), loraConnLabel: $('lora-conn-label'),
     loraStats: $('lora-stats'), loraClearBtn: $('lora-clear-btn'),
-    // DB - Recording
+    // Recording HUD (video overlay)
+    recHudIndicator: $('rec-hud-indicator'),
     recDot: $('rec-dot'), recStatus: $('rec-status'),
     recStartBtn: $('rec-start-btn'), recStopBtn: $('rec-stop-btn'),
     recList: $('rec-list'),
@@ -65,12 +66,14 @@
     mavConnected: false,
     loraConnected: false,
     recording: false,
+    recordingFile: null,   // basename of active recording (e.g. "rec_20260225.avi")
     loraMessages: [],
     sessions: [],
     recordings: [],
   };
 
-  let mavWs = null, loraWs = null, detWs = null;
+  let mavWs = null, loraWs = null, detWs = null, capWs = null;
+  const _knownTrackIds = new Set();  // for new-detection toasts
 
   // ---------------------------------------------------------------------------
   // Helpers
@@ -101,23 +104,23 @@
       return data;
     } catch (err) {
       clearTimeout(timer);
-      if (err.name === 'AbortError') throw new Error('Timeout');
+      if (err.name === 'AbortError') throw new Error('Таймаут');
       throw err;
     }
   }
 
   function formatBytes(bytes) {
-    if (bytes < 1024) return bytes + ' B';
-    if (bytes < 1048576) return (bytes / 1024).toFixed(1) + ' KB';
-    return (bytes / 1048576).toFixed(1) + ' MB';
+    if (bytes < 1024) return bytes + ' Б';
+    if (bytes < 1048576) return (bytes / 1024).toFixed(1) + ' КБ';
+    return (bytes / 1048576).toFixed(1) + ' МБ';
   }
 
   function formatDuration(ms) {
-    if (ms < 1000) return ms + 'ms';
+    if (ms < 1000) return ms + ' мс';
     const s = Math.floor(ms / 1000);
-    if (s < 60) return s + 's';
+    if (s < 60) return s + ' с';
     const m = Math.floor(s / 60);
-    return m + 'm ' + (s % 60) + 's';
+    return m + ' мин ' + (s % 60) + ' с';
   }
 
   function formatTimestamp(ts) {
@@ -149,6 +152,47 @@
     connectLoraWS();
     loadModels();
     loadConfig();
+    connectCaptureWS();
+  }
+
+  // ---------------------------------------------------------------------------
+  // Capture WebSocket — recording status push
+  // ---------------------------------------------------------------------------
+  function connectCaptureWS() {
+    if (capWs && capWs.readyState < 2) return;
+    const url = `${wsProto}//${host}:${ports.cap}/ws`;
+    capWs = new WebSocket(url);
+
+    capWs.onmessage = (e) => {
+      try {
+        const data = JSON.parse(e.data);
+        if (data.event === 'status') {
+          const wasRecording = state.recording;
+          state.recording = !!data.recording;
+          state.recordingFile = data.recording_path
+            ? data.recording_path.replace(/\\/g, '/').split('/').pop()
+            : null;
+          updateRecUI();
+          // Refresh recordings list when recording state changes
+          if (wasRecording && !state.recording) loadRecordings();
+        } else if (data.event === 'recording_started') {
+          state.recording = true;
+          state.recordingFile = data.path
+            ? data.path.replace(/\\/g, '/').split('/').pop()
+            : null;
+          updateRecUI();
+          loadRecordings();
+        } else if (data.event === 'recording_stopped') {
+          state.recording = false;
+          state.recordingFile = null;
+          updateRecUI();
+          loadRecordings();
+        }
+      } catch { /* ignore parse errors */ }
+    };
+
+    capWs.onclose = () => { setTimeout(connectCaptureWS, 3000); };
+    capWs.onerror = () => { capWs.close(); };
   }
 
   // ---------------------------------------------------------------------------
@@ -225,7 +269,7 @@
       overlayCtx.strokeRect(bx, by, bw, bh);
 
       const conf = (t.confidence * 100).toFixed(1);
-      const labelText = `${t.class_name || 'obj'} #${t.track_id} ${conf}%`;
+      const labelText = `${t.class_name || 'объект'} #${t.track_id} ${conf}%`;
       const metrics = overlayCtx.measureText(labelText);
       const tw = metrics.width + 10;
       const th = Math.max(16, Math.round(18 * scale));
@@ -248,8 +292,8 @@
     detWs = new WebSocket(url);
 
     detWs.onopen = () => {
-      updateStatusIndicator('Online', 'detected');
-      appendLog(els.wsDetLog, '[connected]');
+      updateStatusIndicator('На связи', 'detected');
+      appendLog(els.wsDetLog, '[подключено]');
     };
 
     detWs.onmessage = (e) => {
@@ -264,14 +308,30 @@
           drawOverlay();
           updateTrackStats();
           renderTrackers();
+
+          // Toast for new tracks
+          state.tracks.forEach((t) => {
+            if (t.track_id >= 0 && !_knownTrackIds.has(t.track_id)) {
+              _knownTrackIds.add(t.track_id);
+              const conf = (t.confidence * 100).toFixed(0);
+              showToast(`${t.class_name || 'объект'} #${t.track_id} (${conf}%)`, 'detect');
+            }
+          });
+
+          // Toast when total_detections increases (saved to DB)
+          const total = data.metrics && data.metrics.total_detections;
+          if (total !== undefined && state._lastSavedTotal !== undefined && total > state._lastSavedTotal) {
+            showToast(`Детекция сохранена (всего ${total})`, 'save', 2500);
+          }
+          state._lastSavedTotal = total;
         }
       } catch { /* ignore */ }
       appendLog(els.wsDetLog, e.data.substring(0, 200));
     };
 
     detWs.onclose = () => {
-      updateStatusIndicator('Disconnected', 'error');
-      appendLog(els.wsDetLog, '[disconnected]');
+      updateStatusIndicator('Нет связи', 'error');
+      appendLog(els.wsDetLog, '[отключено]');
       setTimeout(connectDetectionWS, 3000);
     };
     detWs.onerror = () => {};
@@ -287,8 +347,8 @@
   function updateMetrics() {
     const m = state.metrics;
     setText('m-fps', m.fps ?? '—');
-    setText('m-infer', m.last_inference_ms !== undefined ? m.last_inference_ms + ' ms' : '—');
-    setText('m-avg', m.avg_frame_ms !== undefined ? m.avg_frame_ms + ' ms' : '—');
+    setText('m-infer', m.last_inference_ms !== undefined ? m.last_inference_ms + ' мс' : '—');
+    setText('m-avg', m.avg_frame_ms !== undefined ? m.avg_frame_ms + ' мс' : '—');
     setText('m-frame', m.frame_number ?? '—');
     setText('m-tracks', m.active_tracks ?? '—');
     setText('m-total', m.total_detections ?? '—');
@@ -304,7 +364,7 @@
     if (!state.tracks.length) {
       container.innerHTML = '';
       container.classList.add('empty-state');
-      container.textContent = 'No active tracks';
+      container.textContent = 'Нет активных треков';
       return;
     }
 
@@ -345,7 +405,7 @@
       if (t.jpeg_url && !thumb.querySelector('img')) {
         const img = document.createElement('img');
         img.src = `${origin(ports.det)}${t.jpeg_url}`;
-        img.alt = `Track ${t.track_id}`;
+        img.alt = `Трек ${t.track_id}`;
         img.loading = 'lazy';
         img.addEventListener('click', (ev) => { ev.stopPropagation(); openDetectionModal(t); });
         thumb.appendChild(img);
@@ -353,14 +413,14 @@
 
       card.querySelector('.ti-top strong').textContent = `#${t.track_id}`;
       card.querySelector('.ti-top span').textContent = `${(t.confidence * 100).toFixed(1)}%`;
-      card.querySelector('.ti-class').textContent = t.class_name || 'object';
+      card.querySelector('.ti-class').textContent = t.class_name || 'объект';
 
       // Lifetime
       if (t.first_seen) {
         const start = new Date(t.first_seen).getTime();
         const now = Date.now();
         const dur = now - start;
-        card.querySelector('.ti-life').textContent = `alive ${formatDuration(dur)}`;
+        card.querySelector('.ti-life').textContent = `${formatDuration(dur)}`;
       }
     });
 
@@ -386,7 +446,7 @@
       });
       if (!data.models || !data.models.length) {
         const opt = document.createElement('option');
-        opt.textContent = 'No models found';
+        opt.textContent = 'Модели не найдены';
         els.modelSelect.appendChild(opt);
       }
     } catch { /* service may not be ready */ }
@@ -402,7 +462,7 @@
         body: JSON.stringify({ name }),
       });
     } catch (err) {
-      showError('Model switch failed: ' + err.message);
+      showError('Ошибка смены модели: ' + err.message);
     }
   }
 
@@ -437,14 +497,14 @@
         body: JSON.stringify({ confidence: conf, save_confidence: saveConf, imgsz, skip_frames: skip }),
       });
     } catch (err) {
-      showError('Config update failed: ' + err.message);
+      showError('Ошибка обновления настроек: ' + err.message);
     }
   }
 
   // ---------------------------------------------------------------------------
   // MAVLink WebSocket — telemetry
   // ---------------------------------------------------------------------------
-  const FIX_NAMES = { 0: 'No GPS', 1: 'No Fix', 2: '2D', 3: '3D', 4: 'DGPS', 5: 'RTK Float', 6: 'RTK Fixed' };
+  const FIX_NAMES = { 0: 'Нет GPS', 1: 'Нет фикс.', 2: '2D', 3: '3D', 4: 'DGPS', 5: 'RTK Float', 6: 'RTK Fixed' };
 
   function connectMavlinkWS() {
     if (mavWs && mavWs.readyState < 2) return;
@@ -454,7 +514,7 @@
     mavWs.onopen = () => {
       state.mavConnected = true;
       setMavStatus(true);
-      appendLog(els.wsMavLog, '[connected]');
+      appendLog(els.wsMavLog, '[подключено]');
     };
 
     mavWs.onmessage = (e) => {
@@ -472,7 +532,7 @@
     mavWs.onclose = () => {
       state.mavConnected = false;
       setMavStatus(false);
-      appendLog(els.wsMavLog, '[disconnected]');
+      appendLog(els.wsMavLog, '[отключено]');
       setTimeout(connectMavlinkWS, 3000);
     };
     mavWs.onerror = () => {};
@@ -491,8 +551,8 @@
     const g = t.gps || {};
     setText('t-lat', (g.lat || 0).toFixed(6));
     setText('t-lon', (g.lon || 0).toFixed(6));
-    setText('t-alt-msl', (g.alt_msl || 0).toFixed(1) + ' m');
-    setText('t-alt-rel', (g.alt_rel || 0).toFixed(1) + ' m');
+    setText('t-alt-msl', (g.alt_msl || 0).toFixed(1) + ' м');
+    setText('t-alt-rel', (g.alt_rel || 0).toFixed(1) + ' м');
     setText('t-fix', FIX_NAMES[g.fix_type] || String(g.fix_type || '—'));
     setText('t-sats', g.satellites || 0);
     setText('t-hdop', (g.hdop || 0).toFixed(1));
@@ -500,22 +560,22 @@
     const h = t.heartbeat || {};
     const v = t.vfr || {};
     const modeEl = $('t-mode');
-    if (modeEl) modeEl.innerHTML = `<span class="mode-badge">${h.mode || 'N/A'}</span>`;
+    if (modeEl) modeEl.innerHTML = `<span class="mode-badge">${h.mode || 'Н/Д'}</span>`;
     const armedEl = $('t-armed');
     if (armedEl) {
       armedEl.innerHTML = h.armed
-        ? '<span class="armed-badge yes">ARMED</span>'
-        : '<span class="armed-badge">DISARMED</span>';
+        ? '<span class="armed-badge yes">АКТИВЕН</span>'
+        : '<span class="armed-badge">НЕАКТИВЕН</span>';
     }
-    setText('t-speed', (v.groundspeed || 0).toFixed(1) + ' m/s');
-    setText('t-airspeed', (v.airspeed || 0).toFixed(1) + ' m/s');
+    setText('t-speed', (v.groundspeed || 0).toFixed(1) + ' м/с');
+    setText('t-airspeed', (v.airspeed || 0).toFixed(1) + ' м/с');
     setText('t-heading', (v.heading || 0) + '\u00b0');
-    setText('t-climb', (v.climb || 0).toFixed(1) + ' m/s');
+    setText('t-climb', (v.climb || 0).toFixed(1) + ' м/с');
     setText('t-throttle', (v.throttle || 0) + '%');
 
     const b = t.battery || {};
-    setText('t-bat-v', (b.voltage || 0).toFixed(1) + ' V');
-    setText('t-bat-a', (b.current || 0).toFixed(1) + ' A');
+    setText('t-bat-v', (b.voltage || 0).toFixed(1) + ' В');
+    setText('t-bat-a', (b.current || 0).toFixed(1) + ' А');
     const pct = b.remaining >= 0 ? b.remaining : -1;
     if (pct >= 0) {
       setText('t-bat-pct', pct + '%');
@@ -527,7 +587,7 @@
       const pctEl = $('t-bat-pct');
       if (pctEl) pctEl.className = 'val' + (pct <= 15 ? ' crit' : pct <= 30 ? ' warn' : ' ok');
     } else {
-      setText('t-bat-pct', 'N/A');
+      setText('t-bat-pct', 'Н/Д');
     }
 
     const a = t.attitude || {};
@@ -547,7 +607,7 @@
     loraWs.onopen = () => {
       state.loraConnected = true;
       setLoraStatus(true);
-      appendLog(els.wsLoraLog, '[connected]');
+      appendLog(els.wsLoraLog, '[подключено]');
     };
 
     loraWs.onmessage = (e) => {
@@ -567,7 +627,7 @@
     loraWs.onclose = () => {
       state.loraConnected = false;
       setLoraStatus(false);
-      appendLog(els.wsLoraLog, '[disconnected]');
+      appendLog(els.wsLoraLog, '[отключено]');
       setTimeout(connectLoraWS, 3000);
     };
     loraWs.onerror = () => {};
@@ -580,7 +640,7 @@
       els.loraStatus.innerHTML = `<span class="dot ${on ? 'on' : ''}" id="lora-dot"></span> ${on ? 'OK' : '—'}`;
     }
     if (els.loraConnLabel) {
-      els.loraConnLabel.textContent = on ? 'Connected' : 'Disconnected';
+      els.loraConnLabel.textContent = on ? 'Подключено' : 'Отключено';
       els.loraConnLabel.classList.toggle('on', on);
     }
   }
@@ -614,7 +674,7 @@
     const tx = msgs.filter((m) => m.direction === 'tx').length;
     const rx = msgs.filter((m) => m.direction === 'rx').length;
     const tel = msgs.filter((m) => m.type === 'telemetry' || m.type === 'telemetry_rx').length;
-    els.loraStats.textContent = `TX: ${tx} | RX: ${rx} | Telemetry: ${tel} | Total: ${msgs.length}`;
+    els.loraStats.textContent = `Отпр: ${tx} | Принято: ${rx} | Телеметрия: ${tel} | Всего: ${msgs.length}`;
   }
 
   async function sendLoraMessage() {
@@ -629,7 +689,7 @@
       addLoraMsg({ direction: 'tx', data: text, ts: Date.now() / 1000 });
       if (els.loraText) els.loraText.value = '';
     } catch (err) {
-      addLoraMsg({ direction: 'tx', data: `[Error: ${err.message}] ${text}`, ts: Date.now() / 1000 });
+      addLoraMsg({ direction: 'tx', data: `[Ошибка: ${err.message}] ${text}`, ts: Date.now() / 1000 });
     }
   }
 
@@ -643,50 +703,84 @@
       state.recordings = Array.isArray(data.recordings) ? data.recordings : [];
       renderRecordings();
     } catch (err) {
-      els.recList.innerHTML = `<div style="color:#ff7f8a;padding:8px">Error: ${err.message}</div>`;
+      els.recList.innerHTML = `<div style="color:#ff7f8a;padding:8px">Ошибка: ${err.message}</div>`;
     }
   }
 
   function renderRecordings() {
     if (!els.recList) return;
-    let recs = [...(state.recordings || [])];
+    const recs = [...(state.recordings || [])];
 
-    // Sort using the shared selector
+    // Sort
     const sort = els.dbSort ? els.dbSort.value : 'date-desc';
     if (sort === 'date-asc') recs.sort((a, b) => (a.modified || 0) - (b.modified || 0));
     else recs.sort((a, b) => (b.modified || 0) - (a.modified || 0));
 
     if (!recs.length) {
-      els.recList.innerHTML = '<div style="color:#64748b;text-align:center;padding:12px">No recordings</div>';
+      els.recList.innerHTML = '<div style="color:#64748b;text-align:center;padding:12px">Нет записей</div>';
       return;
     }
-    els.recList.innerHTML = '';
+
+    // Group files by timestamp: rec_20260225_143000.avi & det_20260225_143000.avi → one group
+    const groups = new Map(); // key = timestamp, value = { raw, det, date, size }
+    const byName = new Map();
     recs.forEach((r) => {
-      const name = typeof r === 'string' ? r : (r.filename || 'recording');
-      const size = r.size_bytes ? formatBytes(r.size_bytes) : '';
-      const date = r.modified ? formatTimestamp(r.modified) : '';
+      const name = typeof r === 'string' ? r : (r.filename || '');
+      byName.set(name, r);
+      const m = name.match(/^(rec|det)_(.+)\.avi$/);
+      const key = m ? m[2] : name;  // timestamp or full name for unknown files
+      if (!groups.has(key)) groups.set(key, { raw: null, det: null, modified: 0, size: 0 });
+      const g = groups.get(key);
+      if (m && m[1] === 'det') g.det = name;
+      else if (m && m[1] === 'rec') g.raw = name;
+      else g.raw = name;  // unknown format — treat as raw
+      g.modified = Math.max(g.modified, r.modified || 0);
+      g.size += r.size_bytes || 0;
+    });
+
+    // Active recording ID
+    const activeId = (state.recording && state.recordingFile)
+      ? (state.recordingFile.match(/^rec_(.+)\.avi$/) || [])[1]
+      : null;
+
+    const dlUrl = (name) => `${origin(ports.cap)}/recordings/${encodeURIComponent(name)}`;
+
+    els.recList.innerHTML = '';
+    groups.forEach((g, key) => {
+      const isActive = activeId && key === activeId;
+      const date = g.modified ? formatTimestamp(g.modified) : '';
+      const size = g.size ? formatBytes(g.size) : '';
+
       const item = document.createElement('div');
-      item.className = 'rec-item';
+      item.className = 'rec-item' + (isActive ? ' rec-active' : '');
       item.innerHTML = `
-        <span class="rec-name" title="${name}">${name}</span>
+        <span class="rec-name" title="${key}">${key}</span>
+        ${isActive ? '<span class="active-badge">Запись...</span>' : ''}
         <span class="rec-date">${date}</span>
         <span class="rec-size">${size}</span>
         <div class="rec-actions">
-          <a href="${origin(ports.cap)}/recordings/${encodeURIComponent(name)}" target="_blank" style="color:#7ee5ff;text-decoration:none;font-size:0.72rem;padding:2px 6px">DL</a>
-          <button class="sm danger del-rec-btn" data-name="${name}">Del</button>
+          ${!isActive && g.raw ? `<a class="rec-dl-btn rec-dl-raw" href="${dlUrl(g.raw)}" target="_blank">Сырое</a>` : ''}
+          ${!isActive && g.det ? `<a class="rec-dl-btn rec-dl-det" href="${dlUrl(g.det)}" target="_blank">Детекция</a>` : ''}
+          ${!isActive ? `<button class="sm danger del-rec-btn" data-raw="${g.raw || ''}" data-det="${g.det || ''}">✕</button>` : ''}
         </div>`;
       els.recList.appendChild(item);
     });
-    // Bind delete buttons
+
+    // Bind delete buttons — delete both files in the group
     els.recList.querySelectorAll('.del-rec-btn').forEach((btn) => {
       btn.addEventListener('click', async () => {
-        const fn = btn.dataset.name;
-        if (!confirm(`Delete recording "${fn}"?`)) return;
+        const rawName = btn.dataset.raw;
+        const detName = btn.dataset.det;
+        const label = rawName || detName;
+        if (!confirm(`Удалить запись «${label}»?`)) return;
         try {
-          await fetchJSON(`${origin(ports.cap)}/recordings/${encodeURIComponent(fn)}`, { method: 'DELETE' });
+          const deletes = [];
+          if (rawName) deletes.push(fetchJSON(`${origin(ports.cap)}/recordings/${encodeURIComponent(rawName)}`, { method: 'DELETE' }).catch(() => {}));
+          if (detName) deletes.push(fetchJSON(`${origin(ports.cap)}/recordings/${encodeURIComponent(detName)}`, { method: 'DELETE' }).catch(() => {}));
+          await Promise.all(deletes);
           loadRecordings();
         } catch (err) {
-          showError('Delete failed: ' + err.message);
+          showError('Ошибка удаления: ' + err.message);
         }
       });
     });
@@ -695,11 +789,30 @@
   async function startRecording() {
     try {
       if (els.recStartBtn) els.recStartBtn.disabled = true;
-      await fetchJSON(`${origin(ports.cap)}/recording/start`, { method: 'POST' });
+      // Generate shared ID so both files have matching timestamps
+      const now = new Date();
+      const recId = now.getFullYear().toString()
+        + String(now.getMonth() + 1).padStart(2, '0')
+        + String(now.getDate()).padStart(2, '0') + '_'
+        + String(now.getHours()).padStart(2, '0')
+        + String(now.getMinutes()).padStart(2, '0')
+        + String(now.getSeconds()).padStart(2, '0');
+      const body = JSON.stringify({ id: recId });
+      const hdrs = { 'Content-Type': 'application/json' };
+      // Start both raw and annotated recording in parallel with same ID
+      const [capData] = await Promise.all([
+        fetchJSON(`${origin(ports.cap)}/recording/start`, { method: 'POST', headers: hdrs, body }),
+        fetchJSON(`${origin(ports.det)}/recording/start`, { method: 'POST', headers: hdrs, body }).catch(() => {}),
+      ]);
       state.recording = true;
+      state.recordingFile = capData.path
+        ? capData.path.replace(/\\/g, '/').split('/').pop()
+        : null;
       updateRecUI();
+      loadRecordings();
+      showToast('Запись начата', 'rec');
     } catch (err) {
-      showError('Recording error: ' + err.message);
+      showError('Ошибка записи: ' + err.message);
     } finally {
       if (els.recStartBtn) els.recStartBtn.disabled = false;
     }
@@ -708,12 +821,19 @@
   async function stopRecording() {
     try {
       if (els.recStopBtn) els.recStopBtn.disabled = true;
-      await fetchJSON(`${origin(ports.cap)}/recording/stop`, { method: 'POST' });
+      // Stop both raw and annotated recording in parallel
+      const [capData] = await Promise.all([
+        fetchJSON(`${origin(ports.cap)}/recording/stop`, { method: 'POST' }),
+        fetchJSON(`${origin(ports.det)}/recording/stop`, { method: 'POST' }).catch(() => {}),
+      ]);
       state.recording = false;
+      state.recordingFile = null;
       updateRecUI();
       loadRecordings();
+      const name = capData.path ? capData.path.split('/').pop() : '';
+      showToast(`Запись сохранена${name ? ': ' + name : ''}`, 'stop');
     } catch (err) {
-      showError('Stop error: ' + err.message);
+      showError('Ошибка остановки: ' + err.message);
     } finally {
       if (els.recStopBtn) els.recStopBtn.disabled = false;
     }
@@ -721,10 +841,8 @@
 
   function updateRecUI() {
     if (els.recDot) els.recDot.classList.toggle('active', state.recording);
-    if (els.recStatus) {
-      els.recStatus.textContent = state.recording ? 'REC' : 'Idle';
-      els.recStatus.style.color = state.recording ? '#ff4040' : '#94a3b8';
-    }
+    if (els.recHudIndicator) els.recHudIndicator.classList.toggle('active', state.recording);
+    if (els.recStatus) els.recStatus.textContent = state.recording ? 'ЗАПИСЬ' : 'СТОП';
     if (els.recStartBtn) els.recStartBtn.disabled = state.recording;
     if (els.recStopBtn) els.recStopBtn.disabled = !state.recording;
   }
@@ -739,7 +857,7 @@
       state.sessions = data.sessions || [];
       renderSessions();
     } catch (err) {
-      els.sessList.innerHTML = `<div style="color:#ff7f8a;padding:8px">Error: ${err.message}</div>`;
+      els.sessList.innerHTML = `<div style="color:#ff7f8a;padding:8px">Ошибка: ${err.message}</div>`;
     }
   }
 
@@ -762,7 +880,7 @@
     else sessions.sort((a, b) => b.created - a.created);
 
     if (!sessions.length) {
-      els.sessList.innerHTML = '<div style="color:#64748b;text-align:center;padding:12px">No sessions</div>';
+      els.sessList.innerHTML = '<div style="color:#64748b;text-align:center;padding:12px">Нет сессий</div>';
       return;
     }
 
@@ -775,19 +893,19 @@
       card.innerHTML = `
         <div class="sess-top">
           <span class="sess-id">${s.session_id}</span>
-          ${s.active ? '<span class="active-badge">Active</span>' : ''}
+          ${s.active ? '<span class="active-badge">Активна</span>' : ''}
           <span class="sess-date">${date}</span>
         </div>
         <div class="sess-meta">
-          <span>Detections: ${s.detections}</span>
-          <span>Tracks: ${s.tracks}</span>
-          <span>GIFs: ${s.gifs}</span>
+          <span>Детекции: ${s.detections}</span>
+          <span>Треки: ${s.tracks}</span>
+          <span>GIF: ${s.gifs}</span>
           <span>${size}</span>
         </div>
         ${s.classes && s.classes.length ? `<div class="sess-classes">${s.classes.join(', ')}</div>` : ''}
         <div class="sess-actions">
-          <button class="sm sess-view-btn" data-sid="${s.session_id}">View</button>
-          ${s.active ? '' : `<button class="sm danger sess-del-btn" data-sid="${s.session_id}">Delete</button>`}
+          <button class="sm sess-view-btn" data-sid="${s.session_id}">Открыть</button>
+          ${s.active ? '' : `<button class="sm danger sess-del-btn" data-sid="${s.session_id}">Удалить</button>`}
         </div>`;
       els.sessList.appendChild(card);
     });
@@ -801,12 +919,12 @@
     els.sessList.querySelectorAll('.sess-del-btn').forEach((btn) => {
       btn.addEventListener('click', async () => {
         const sid = btn.dataset.sid;
-        if (!confirm(`Delete session "${sid}"?`)) return;
+        if (!confirm(`Удалить сессию «${sid}»?`)) return;
         try {
           await fetchJSON(`${origin(ports.det)}/sessions/${sid}`, { method: 'DELETE' });
           loadSessions();
         } catch (err) {
-          showError('Delete failed: ' + err.message);
+          showError('Ошибка удаления: ' + err.message);
         }
       });
     });
@@ -817,21 +935,21 @@
       const data = await fetchJSON(`${origin(ports.det)}/detections`);
       const dets = Array.isArray(data.detections) ? data.detections : [];
       if (!dets.length) {
-        showError('No detections to show');
+        showError('Нет детекций для отображения');
         return;
       }
       // Group by track_id, show latest per track
       const byTrack = new Map();
       dets.forEach((d) => { if (d.track_id >= 0) byTrack.set(d.track_id, d); });
       if (!byTrack.size) {
-        showError('No tracked detections');
+        showError('Нет отслеживаемых детекций');
         return;
       }
       // Open first track in modal
       const first = byTrack.values().next().value;
       openDetectionModal(first);
     } catch (err) {
-      showError('Error: ' + err.message);
+      showError('Ошибка: ' + err.message);
     }
   }
 
@@ -843,20 +961,20 @@
     if (els.modalImage) {
       const url = det.gif_url || det.jpeg_url;
       els.modalImage.src = url ? `${origin(ports.det)}${url}` : '';
-      els.modalImage.alt = `Track ${det.track_id}`;
+      els.modalImage.alt = `Трек ${det.track_id}`;
     }
     if (els.modalDl) {
       els.modalDl.innerHTML = '';
       const pairs = [
-        ['Track ID', det.track_id],
-        ['Class', det.class_name],
-        ['Confidence', ((det.confidence || 0) * 100).toFixed(2) + '%'],
-        ['Frame', det.frame_number],
-        ['Time', det.timestamp],
-        ['First Seen', det.first_seen || '—'],
+        ['Трек ID', det.track_id],
+        ['Класс', det.class_name],
+        ['Уверенность', ((det.confidence || 0) * 100).toFixed(2) + '%'],
+        ['Кадр', det.frame_number],
+        ['Время', det.timestamp],
+        ['Первое появл.', det.first_seen || '—'],
       ];
       if (det.bbox) {
-        pairs.push(['BBox', `x:${det.bbox.x} y:${det.bbox.y} ${det.bbox.w}x${det.bbox.h}`]);
+        pairs.push(['Область', `x:${det.bbox.x} y:${det.bbox.y} ${det.bbox.w}×${det.bbox.h}`]);
       }
       pairs.forEach(([label, value]) => {
         if (value === undefined || value === null) return;
@@ -902,7 +1020,8 @@
         panels.forEach((p) => p.classList.toggle('active', p.id === `tab-${target}`));
 
         // Load data on tab switch
-        if (target === 'db') { loadRecordings(); loadSessions(); }
+        if (target === 'sessions') loadSessions();
+        if (target === 'recordings') loadRecordings();
         if (target === 'lora' && !state.loraMessages.length) loadLoraHistory();
       });
     });
@@ -925,8 +1044,8 @@
     if (els.stream) {
       els.stream.onload = resizeCanvas;
       els.stream.onerror = () => {
-        updateStatusIndicator('Stream Error', 'error');
-        showError('Failed to connect to video stream');
+        updateStatusIndicator('Ошибка потока', 'error');
+        showError('Не удалось подключиться к видеопотоку');
         setTimeout(startStream, 3000);
       };
     }
@@ -971,14 +1090,8 @@
     if (els.recStopBtn) els.recStopBtn.addEventListener('click', stopRecording);
 
     // DB - Shared sort/filter & refresh
-    if (els.dbRefreshBtn) els.dbRefreshBtn.addEventListener('click', () => {
-      loadRecordings();
-      loadSessions();
-    });
-    if (els.dbSort) els.dbSort.addEventListener('change', () => {
-      renderRecordings();
-      renderSessions();
-    });
+    if (els.dbRefreshBtn) els.dbRefreshBtn.addEventListener('click', loadSessions);
+    if (els.dbSort) els.dbSort.addEventListener('change', renderSessions);
     if (els.sessClassFilter) els.sessClassFilter.addEventListener('input', renderSessions);
 
     // Modal
@@ -989,6 +1102,33 @@
     // Log popup
     if (els.logToggle) els.logToggle.addEventListener('click', toggleLogPopup);
     if (els.logPopupClose) els.logPopupClose.addEventListener('click', closeLogPopup);
+  }
+
+  // ---------------------------------------------------------------------------
+  // Toasts
+  // ---------------------------------------------------------------------------
+  const toastContainer = $('toast-container');
+
+  /**
+   * Show a toast notification.
+   * @param {string} text  — message
+   * @param {'rec'|'stop'|'detect'|'save'} type — visual style
+   * @param {number} duration — ms before auto-dismiss (default 3000)
+   */
+  function showToast(text, type = 'detect', duration = 3000) {
+    if (!toastContainer) return;
+    const el = document.createElement('div');
+    el.className = `toast toast-${type}`;
+    el.innerHTML = `<span class="toast-icon"></span><span class="toast-text">${text}</span>`;
+    toastContainer.appendChild(el);
+    // Keep max 5 toasts
+    while (toastContainer.children.length > 5) {
+      toastContainer.removeChild(toastContainer.firstChild);
+    }
+    setTimeout(() => {
+      el.classList.add('out');
+      setTimeout(() => el.remove(), 300);
+    }, duration);
   }
 
   // ---------------------------------------------------------------------------

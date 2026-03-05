@@ -88,9 +88,19 @@ def main() -> None:
     for svc in services:
         cmd = [PYTHON, svc["script"]]
         log.info("  Starting %-12s  port %-5s  %s", svc["name"], svc["port"], svc["script"])
-        proc = subprocess.Popen(cmd, env=env)
-        processes[svc["name"]] = proc
-        time.sleep(0.5)  # stagger startup
+        # Retry on PermissionError (Windows Defender / antivirus can block rapid process creation)
+        for attempt in range(3):
+            try:
+                proc = subprocess.Popen(cmd, env=env)
+                processes[svc["name"]] = proc
+                break
+            except PermissionError as exc:
+                if attempt < 2:
+                    log.warning("  PermissionError starting %s, retrying in 2 s (%s)", svc["name"], exc)
+                    time.sleep(2)
+                else:
+                    log.error("  Failed to start %s after 3 attempts: %s", svc["name"], exc)
+        time.sleep(1)  # stagger startup
 
     log.info("-" * 60)
     log.info("All services launched.  Web UI: http://localhost:%s",

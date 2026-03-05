@@ -13,6 +13,8 @@ POST /model           Switch active model
 GET  /metrics         Real-time performance metrics
 GET  /sessions        List all detection sessions
 DELETE /sessions/{id} Delete a detection session
+POST /recording/start Start annotated video recording (with boxes)
+POST /recording/stop  Stop annotated video recording
 WS   /ws              Real-time tracks + metrics push
 """
 
@@ -30,6 +32,7 @@ import time
 from collections import deque
 from contextlib import asynccontextmanager
 from pathlib import Path
+from queue import Queue, Full
 
 import cv2
 import imageio
@@ -58,6 +61,8 @@ TRACKER = det_cfg.get("tracker", "bytetrack")
 
 cap_cfg = get_section(cfg, "capture")
 SRC_FPS = int(cap_cfg.get("fps", 30))
+REC_DIR = cap_cfg.get("recording", {}).get("directory", "./data/recordings")
+REC_CODEC = cap_cfg.get("recording", {}).get("codec", "MJPG")
 
 MODELS_DIR = os.path.join(project_root(), "models")
 
@@ -76,6 +81,10 @@ async def lifespan(application: FastAPI):
     log.info("Detection service started on port %d  (model=%s, tracker=%s)",
              PORT, MODEL_PATH, TRACKER)
     yield
+    # Stop annotated recording if still active
+    with _det_rec_lock:
+        if _det_recording:
+            _stop_det_recording()
     _save_results()
     log.info("Detection service shutting down, results saved")
 
@@ -100,6 +109,14 @@ _ws_clients: list[WebSocket] = []
 
 # Per-track buffers for GIF creation: {track_id: {"frames": [...], "start": float, "done": bool}}
 _gif_buffers: dict[int, dict] = {}
+
+# Annotated video recording (frames with detection boxes)
+_det_rec_lock = threading.Lock()
+_det_recording = False
+_det_video_writer: cv2.VideoWriter | None = None
+_det_recording_path: str | None = None
+_det_frame_queue: Queue | None = None
+_det_writer_thread: threading.Thread | None = None
 
 # ---------------------------------------------------------------------------
 # Runtime-mutable config & metrics
@@ -161,6 +178,67 @@ def _frame_reader_thread() -> None:
         except Exception as exc:
             log.warning("Stream read error: %s — retrying in 2 s", exc)
             time.sleep(2)
+
+
+# ---------------------------------------------------------------------------
+# Annotated video recording helpers
+# ---------------------------------------------------------------------------
+
+def _det_writer_loop(q: Queue, writer: cv2.VideoWriter) -> None:
+    """Background thread: drain frame queue → VideoWriter (disk I/O off the hot path)."""
+    while True:
+        frame = q.get()
+        if frame is None:  # sentinel — stop
+            break
+        writer.write(frame)
+
+
+def _start_det_recording(rec_id: str | None = None) -> str:
+    """Start recording annotated frames (with detection boxes)."""
+    global _det_recording, _det_video_writer, _det_recording_path
+    global _det_frame_queue, _det_writer_thread
+    os.makedirs(REC_DIR, exist_ok=True)
+    ts = rec_id or datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+    _det_recording_path = os.path.join(REC_DIR, f"det_{ts}.avi")
+    fourcc = cv2.VideoWriter_fourcc(*REC_CODEC)
+    # Get frame dimensions from the latest annotated frame
+    with _lock:
+        f = _annotated_frame
+    if f is not None:
+        rec_h, rec_w = f.shape[:2]
+    else:
+        rec_w, rec_h = 640, 480
+    _det_video_writer = cv2.VideoWriter(_det_recording_path, fourcc, SRC_FPS, (rec_w, rec_h))
+    _det_frame_queue = Queue(maxsize=120)
+    _det_recording = True
+    _det_writer_thread = threading.Thread(
+        target=_det_writer_loop,
+        args=(_det_frame_queue, _det_video_writer),
+        daemon=True,
+    )
+    _det_writer_thread.start()
+    log.info("Det recording started: %s (%dx%d @ %d fps)", _det_recording_path, rec_w, rec_h, SRC_FPS)
+    return _det_recording_path
+
+
+def _stop_det_recording() -> str | None:
+    """Stop recording annotated frames, release writer."""
+    global _det_recording, _det_video_writer, _det_recording_path
+    global _det_frame_queue, _det_writer_thread
+    path = _det_recording_path
+    _det_recording = False
+    # Send sentinel and wait for writer thread to drain remaining frames
+    if _det_frame_queue is not None:
+        _det_frame_queue.put(None)
+    if _det_writer_thread is not None:
+        _det_writer_thread.join(timeout=5)
+        _det_writer_thread = None
+    _det_frame_queue = None
+    if _det_video_writer is not None:
+        _det_video_writer.release()
+        _det_video_writer = None
+    log.info("Det recording stopped: %s", path)
+    return path
 
 
 # ---------------------------------------------------------------------------
@@ -316,6 +394,13 @@ def _detection_loop() -> None:
                 existing = _track_detections.get(tid)
                 if existing is None or t["confidence"] > existing["confidence"]:
                     _track_detections[tid] = t
+
+        # Enqueue annotated frame for background writer (non-blocking)
+        if _det_recording and _det_frame_queue is not None:
+            try:
+                _det_frame_queue.put_nowait(annotated)
+            except Full:
+                pass  # drop frame if queue full — keeps detection loop fast
 
 
 def _safe_crop(frame: np.ndarray, x1: int, y1: int, x2: int, y2: int) -> np.ndarray:
@@ -622,6 +707,34 @@ async def delete_session(session_id: str):
     except Exception as exc:
         log.error("Failed to delete session %s: %s", session_id, exc)
         return JSONResponse({"error": str(exc)}, status_code=500)
+
+
+# ---------------------------------------------------------------------------
+# Annotated recording endpoints
+# ---------------------------------------------------------------------------
+
+@app.post("/recording/start")
+async def det_recording_start(request: Request):
+    body = {}
+    try:
+        body = await request.json()
+    except Exception:
+        pass
+    rec_id = body.get("id") if isinstance(body, dict) else None
+    with _det_rec_lock:
+        if _det_recording:
+            return JSONResponse({"status": "already recording", "path": _det_recording_path})
+        path = _start_det_recording(rec_id=rec_id)
+    return JSONResponse({"status": "started", "path": path})
+
+
+@app.post("/recording/stop")
+async def det_recording_stop():
+    with _det_rec_lock:
+        if not _det_recording:
+            return JSONResponse({"status": "not recording"})
+        path = _stop_det_recording()
+    return JSONResponse({"status": "stopped", "path": path})
 
 
 async def _annotated_mjpeg():
