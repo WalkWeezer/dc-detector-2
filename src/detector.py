@@ -230,24 +230,36 @@ def _stop_det_recording() -> str | None:
 # Detection loop
 # ---------------------------------------------------------------------------
 
+def _ncnn_available() -> bool:
+    """Check if the ncnn Python runtime is importable."""
+    try:
+        import ncnn  # noqa: F401
+        return True
+    except ImportError:
+        return False
+
+
 def _resolve_model_path(path: str) -> str:
-    """If an NCNN-exported version of the model exists, prefer it on Linux.
+    """If an NCNN-exported version of the model exists, prefer it on Linux
+    *and* only when the ``ncnn`` Python package is installed.
 
     NCNN is optimised for ARM (Raspberry Pi) and has compatibility issues
     with Python 3.13+ on Windows, so we only auto-select it on Linux.
     """
     import platform as _plat
     is_linux = _plat.system() == "Linux"
+    has_ncnn = is_linux and _ncnn_available()
 
     if path.endswith("_ncnn_model") and os.path.isdir(path):
-        if is_linux:
+        if has_ncnn:
             return path
-        log.warning("NCNN model requested but skipped on %s — falling back to .pt", _plat.system())
+        log.warning("NCNN model skipped (ncnn module %s) — falling back to .pt",
+                     "not installed" if is_linux else f"not supported on {_plat.system()}")
         pt_path = path.replace("_ncnn_model", ".pt")
         return pt_path if os.path.isfile(pt_path) else path
 
     ncnn_dir = path.replace(".pt", "_ncnn_model")
-    if is_linux and os.path.isdir(ncnn_dir):
+    if has_ncnn and os.path.isdir(ncnn_dir):
         log.info("NCNN model found, using: %s", ncnn_dir)
         return ncnn_dir
     return path
@@ -327,6 +339,17 @@ def _detection_loop() -> None:
             )
         except Exception as exc:
             log.error("Detection error: %s", exc)
+            # If NCNN runtime missing, fall back to .pt automatically
+            if "ncnn" in str(exc).lower():
+                pt_path = _current_model_path.replace("_ncnn_model", ".pt")
+                if pt_path != _current_model_path and os.path.isfile(pt_path):
+                    log.warning("NCNN runtime unavailable — auto-fallback to %s", pt_path)
+                    try:
+                        model = YOLO(pt_path)
+                        _current_model_path = pt_path
+                        log.info("Fallback model loaded: %s", pt_path)
+                    except Exception as exc2:
+                        log.error("Fallback model load failed: %s", exc2)
             continue
 
         elapsed_ms = (time.perf_counter() - t0) * 1000.0
