@@ -414,27 +414,26 @@ def _stop_recording_internal() -> str | None:
 
 async def _mjpeg_generator():
     _encode_params = [cv2.IMWRITE_JPEG_QUALITY, JPEG_QUALITY]
-    _min_interval = 1.0 / max(FPS, 1)
-    _prev_time = 0.0
+    _interval = 1.0 / max(FPS, 1)
     while True:
         with _lock:
             frame = _latest_frame
         if frame is None:
             await asyncio.sleep(0.05)
             continue
-        # Rate-limit: skip if a new frame isn't due yet
-        now = time.monotonic()
-        wait = _min_interval - (now - _prev_time)
-        if wait > 0:
-            await asyncio.sleep(wait)
-        _prev_time = time.monotonic()
+        t0 = time.monotonic()
         ok, jpeg = cv2.imencode(".jpg", frame, _encode_params)
         if not ok:
+            await asyncio.sleep(0.01)
             continue
         yield (
             b"--frame\r\n"
             b"Content-Type: image/jpeg\r\n\r\n" + jpeg.tobytes() + b"\r\n"
         )
+        # Sleep for remaining interval (min 1 ms to keep event loop responsive
+        # for detector httpx, WebSocket, and other async tasks)
+        elapsed = time.monotonic() - t0
+        await asyncio.sleep(max(0.001, _interval - elapsed))
 
 
 # ---------------------------------------------------------------------------
