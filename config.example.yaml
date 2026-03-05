@@ -100,6 +100,9 @@ lora:
   # SSID and password are received from ESP32 via UART automatically
   esp_wifi:
     enabled: true
+    # Static IP for Raspberry Pi on ESP32 WiFi network (leave empty for DHCP)
+    # ESP32 AP is typically 192.168.4.1 — pick any free address in that subnet
+    static_ip: "192.168.4.100/24"
     # mDNS hostname — Pi dashboard accessible at http://<hostname>.local:8080
     hostname: "dc-detect"
 

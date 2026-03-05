@@ -52,6 +52,7 @@ STS_INTERVAL = float(lora_cfg.get("status_interval", 5.0))
 _esp_wifi_cfg = lora_cfg.get("esp_wifi", {})
 ESP_WIFI_ENABLED = _esp_wifi_cfg.get("enabled", False)
 ESP_WIFI_HOSTNAME = _esp_wifi_cfg.get("hostname", "dc-detect")
+ESP_WIFI_STATIC_IP = _esp_wifi_cfg.get("static_ip", "")  # e.g. "192.168.4.100/24"
 
 log = setup_logging("lora", cfg)
 
@@ -594,36 +595,57 @@ def _esp_wifi_connect_loop() -> None:
                 continue
 
             # Set high autoconnect priority so NM doesn't switch to other networks
+            modify_args = [
+                "nmcli", "connection", "modify", target,
+                "connection.autoconnect", "yes",
+                "connection.autoconnect-priority", "100",
+            ]
+            # Static IP: set manual method + address + gateway (ESP32 AP is .4.1)
+            if ESP_WIFI_STATIC_IP:
+                static_addr = ESP_WIFI_STATIC_IP if "/" in ESP_WIFI_STATIC_IP else ESP_WIFI_STATIC_IP + "/24"
+                gw = static_addr.rsplit(".", 1)[0].rsplit(".", 1)[0]  # e.g. "192.168" from "192.168.4.100/24"
+                # Derive gateway as x.x.x.1 from the static IP
+                base = static_addr.split("/")[0]
+                gw = ".".join(base.split(".")[:3]) + ".1"
+                modify_args += [
+                    "ipv4.method", "manual",
+                    "ipv4.addresses", static_addr,
+                    "ipv4.gateway", gw,
+                ]
             try:
-                subprocess.run(
-                    ["nmcli", "connection", "modify", target,
-                     "connection.autoconnect", "yes",
-                     "connection.autoconnect-priority", "100"],
-                    capture_output=True, timeout=5,
-                )
+                subprocess.run(modify_args, capture_output=True, timeout=5)
+                if ESP_WIFI_STATIC_IP:
+                    # Re-activate to apply static IP
+                    subprocess.run(
+                        ["nmcli", "connection", "up", target],
+                        capture_output=True, timeout=15,
+                    )
             except Exception:
                 pass
 
-            # Wait for DHCP
+            # Wait for IP assignment
             time.sleep(3)
 
             # Get assigned IP
             ip = ""
-            try:
-                result = subprocess.run(
-                    ["nmcli", "-t", "-f", "IP4.ADDRESS", "connection", "show", target],
-                    capture_output=True, text=True, timeout=5,
-                )
-                for line in result.stdout.strip().split("\n"):
-                    if ":" in line:
-                        addr = line.split(":", 1)[-1].strip()
-                        if "/" in addr:
-                            addr = addr.split("/")[0]
-                        if addr:
-                            ip = addr
-                            break
-            except Exception:
-                pass
+            if ESP_WIFI_STATIC_IP:
+                ip = ESP_WIFI_STATIC_IP.split("/")[0]
+            else:
+                try:
+                    result = subprocess.run(
+                        ["nmcli", "-t", "-f", "IP4.ADDRESS", "connection", "show", target],
+                        capture_output=True, text=True, timeout=5,
+                    )
+                    for line in result.stdout.strip().split("\n"):
+                        if ":" in line:
+                            addr = line.split(":", 1)[-1].strip()
+                            if "/" in addr:
+                                addr = addr.split("/")[0]
+                            if addr:
+                                ip = addr
+                                break
+                except Exception:
+                    pass
 
             if not ip:
                 log.warning("Connected to %s but no IP assigned", target)
