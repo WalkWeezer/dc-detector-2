@@ -14,8 +14,15 @@ env/
 
 # Data — recordings & detection results (never commit)
 data/
-models/
 logs/
+
+# Models — ignore heavy weights, keep NCNN (optimised for Pi)
+models/*.pt
+models/*.onnx
+models/*.engine
+models/*.torchscript
+# NCNN model dirs are small and deploy-ready — track them
+!models/*_ncnn_model/
 
 # Local config (may contain device-specific paths)
 config.yaml
