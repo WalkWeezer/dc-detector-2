@@ -29,6 +29,8 @@ capture:
   # Manual colour gains [red, blue] — used only when awb_mode: "off"
   # Increase red gain to remove blue tint, increase blue gain to remove yellow tint
   # colour_gains: [1.5, 1.2]
+  # MJPEG stream JPEG quality (1–100, lower = faster + less bandwidth)
+  jpeg_quality: 80
   # Recording settings (raw video without detection boxes)
   # Detector service also writes annotated video (det_*.avi) to the same directory
   recording:

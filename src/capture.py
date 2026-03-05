@@ -48,6 +48,7 @@ PORT = int(cap_cfg.get("port", 8001))
 REC_ENABLED = cap_cfg.get("recording", {}).get("enabled", True)
 REC_DIR = cap_cfg.get("recording", {}).get("directory", "./data/recordings")
 REC_CODEC = cap_cfg.get("recording", {}).get("codec", "MJPG")
+JPEG_QUALITY = int(cap_cfg.get("jpeg_quality", 80))
 AWB_MODE = cap_cfg.get("awb_mode", "auto").lower()
 AWB_SETTLE = float(cap_cfg.get("awb_settle_time", 2.0))
 COLOUR_GAINS = cap_cfg.get("colour_gains", None)  # [red, blue] or None
@@ -135,10 +136,11 @@ class Picamera2Capture:
         if not self._opened:
             return False, None
         try:
-            frame_rgb = self._cam.capture_array()
-            # Picamera2 returns RGB, OpenCV expects BGR
-            frame_bgr = cv2.cvtColor(frame_rgb, cv2.COLOR_RGB2BGR)
-            return True, frame_bgr
+            # Picamera2 "RGB888" format is actually BGR in memory
+            # (DRM pixel format naming is MSB-first, but memory layout
+            #  on little-endian ARM is BGR) — matches OpenCV directly.
+            frame = self._cam.capture_array()
+            return True, frame
         except Exception as exc:
             log.warning("Picamera2 read error: %s", exc)
             return False, None
@@ -411,21 +413,28 @@ def _stop_recording_internal() -> str | None:
 # ---------------------------------------------------------------------------
 
 async def _mjpeg_generator():
+    _encode_params = [cv2.IMWRITE_JPEG_QUALITY, JPEG_QUALITY]
+    _min_interval = 1.0 / max(FPS, 1)
+    _prev_time = 0.0
     while True:
         with _lock:
             frame = _latest_frame
         if frame is None:
             await asyncio.sleep(0.05)
             continue
-        ok, jpeg = cv2.imencode(".jpg", frame)
+        # Rate-limit: skip if a new frame isn't due yet
+        now = time.monotonic()
+        wait = _min_interval - (now - _prev_time)
+        if wait > 0:
+            await asyncio.sleep(wait)
+        _prev_time = time.monotonic()
+        ok, jpeg = cv2.imencode(".jpg", frame, _encode_params)
         if not ok:
-            await asyncio.sleep(0.05)
             continue
         yield (
             b"--frame\r\n"
             b"Content-Type: image/jpeg\r\n\r\n" + jpeg.tobytes() + b"\r\n"
         )
-        await asyncio.sleep(1.0 / max(FPS, 1))
 
 
 # ---------------------------------------------------------------------------
