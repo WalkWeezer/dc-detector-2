@@ -73,7 +73,14 @@
 
             <!-- Модель и настройки -->
             <section class="card">
-              <header><h2>Модель и настройки</h2></header>
+              <header>
+                <h2>Модель и настройки</h2>
+                <label class="toggle-switch" title="Вкл/выкл детекцию">
+                  <input type="checkbox" id="det-toggle" checked />
+                  <span class="toggle-slider"></span>
+                  <span class="toggle-label" id="det-toggle-label">ВКЛ</span>
+                </label>
+              </header>
               <div class="form-col">
                 <div class="form-row">
                   <label class="form-label">Модель</label>
@@ -106,6 +113,37 @@
                   <input type="range" id="skip-slider" min="0" max="30" value="0" />
                 </div>
                 <button id="apply-config-btn" class="accent full-w">Применить</button>
+              </div>
+            </section>
+
+            <!-- Баланс белого -->
+            <section class="card">
+              <header><h2>Баланс белого</h2></header>
+              <div class="form-col">
+                <div class="form-row">
+                  <label class="form-label">Режим AWB</label>
+                  <select id="awb-mode-select">
+                    <option value="auto">Auto</option>
+                    <option value="daylight">Daylight</option>
+                    <option value="cloudy">Cloudy</option>
+                    <option value="tungsten">Tungsten</option>
+                    <option value="fluorescent">Fluorescent</option>
+                    <option value="incandescent">Incandescent</option>
+                    <option value="indoor">Indoor</option>
+                    <option value="off">Ручной</option>
+                  </select>
+                </div>
+                <div id="awb-gains-group" class="form-col" style="display:none">
+                  <div class="slider-field">
+                    <div class="slider-label"><span>Red gain</span><span class="slider-value" id="awb-red-val">1.00</span></div>
+                    <input type="range" id="awb-red-slider" min="50" max="400" value="100" />
+                  </div>
+                  <div class="slider-field">
+                    <div class="slider-label"><span>Blue gain</span><span class="slider-value" id="awb-blue-val">1.00</span></div>
+                    <input type="range" id="awb-blue-slider" min="50" max="400" value="100" />
+                  </div>
+                </div>
+                <button id="apply-awb-btn" class="accent full-w">Применить AWB</button>
               </div>
             </section>
 

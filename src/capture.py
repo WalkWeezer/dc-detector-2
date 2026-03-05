@@ -48,6 +48,9 @@ PORT = int(cap_cfg.get("port", 8001))
 REC_ENABLED = cap_cfg.get("recording", {}).get("enabled", True)
 REC_DIR = cap_cfg.get("recording", {}).get("directory", "./data/recordings")
 REC_CODEC = cap_cfg.get("recording", {}).get("codec", "MJPG")
+AWB_MODE = cap_cfg.get("awb_mode", "auto").lower()
+AWB_SETTLE = float(cap_cfg.get("awb_settle_time", 2.0))
+COLOUR_GAINS = cap_cfg.get("colour_gains", None)  # [red, blue] or None
 
 log = setup_logging("capture", cfg)
 
@@ -63,6 +66,8 @@ _cap: "cv2.VideoCapture | Picamera2Capture | None" = None
 _playback_mode = False
 _ws_clients: list[WebSocket] = []
 _actual_fps: float = FPS  # actual camera FPS for recording
+_current_awb_mode: str = AWB_MODE
+_current_colour_gains: list | None = [float(g) for g in COLOUR_GAINS] if COLOUR_GAINS else None
 
 
 def _update_actual_fps(cap: cv2.VideoCapture | None) -> None:
@@ -85,21 +90,43 @@ def _update_actual_fps(cap: cv2.VideoCapture | None) -> None:
 class Picamera2Capture:
     """Wraps Picamera2 with cv2.VideoCapture-compatible read()/release()/isOpened()."""
 
+    # Picamera2 AwbMode name → libcamera enum value
+    _AWB_MODES = {
+        "auto": 0, "incandescent": 1, "tungsten": 2,
+        "fluorescent": 3, "indoor": 4, "daylight": 5,
+        "cloudy": 6, "custom": 7,
+    }
+
     def __init__(self, width: int, height: int, fps: int):
         from picamera2 import Picamera2
         self._cam = Picamera2()
+
+        # Build controls dict
+        controls: dict = {"FrameRate": fps}
+        if AWB_MODE == "off" and COLOUR_GAINS:
+            # Manual white balance
+            controls["AwbEnable"] = False
+            controls["ColourGains"] = tuple(float(g) for g in COLOUR_GAINS)
+            log.info("AWB disabled, manual ColourGains=(%.2f, %.2f)",
+                     controls["ColourGains"][0], controls["ColourGains"][1])
+        else:
+            controls["AwbEnable"] = True
+            awb_val = self._AWB_MODES.get(AWB_MODE, 0)
+            controls["AwbMode"] = awb_val
+            log.info("AWB enabled, mode=%s (%d)", AWB_MODE, awb_val)
+
         config = self._cam.create_video_configuration(
             main={"size": (width, height), "format": "RGB888"},
-            controls={"FrameRate": fps},
+            controls=controls,
         )
         self._cam.configure(config)
         self._cam.start()
-        # Let auto-exposure settle
-        time.sleep(1.0)
+        # Let auto-exposure & AWB settle
+        time.sleep(AWB_SETTLE)
         self._opened = True
         props = self._cam.camera_properties
-        log.info("Picamera2 opened: sensor=%s, requested %dx%d@%dfps",
-                 props.get("Model", "?"), width, height, fps)
+        log.info("Picamera2 opened: sensor=%s, requested %dx%d@%dfps (AWB settle=%.1fs)",
+                 props.get("Model", "?"), width, height, fps, AWB_SETTLE)
 
     def isOpened(self) -> bool:
         return self._opened
@@ -128,6 +155,20 @@ class Picamera2Capture:
     def set(self, prop_id: int, value: float) -> bool:
         # Resolution/FPS are set at configure time, ignore runtime changes
         return True
+
+    def set_awb(self, mode: str, colour_gains: list | None = None) -> dict:
+        """Change AWB at runtime. Returns the applied settings."""
+        mode = mode.lower()
+        if mode == "off" and colour_gains:
+            gains = tuple(float(g) for g in colour_gains)
+            self._cam.set_controls({"AwbEnable": False, "ColourGains": gains})
+            log.info("Runtime AWB off, ColourGains=(%.2f, %.2f)", gains[0], gains[1])
+            return {"awb_mode": "off", "colour_gains": list(gains)}
+        else:
+            awb_val = self._AWB_MODES.get(mode, 0)
+            self._cam.set_controls({"AwbEnable": True, "AwbMode": awb_val})
+            log.info("Runtime AWB mode=%s (%d)", mode, awb_val)
+            return {"awb_mode": mode, "colour_gains": None}
 
     def release(self) -> None:
         if self._opened:
@@ -419,6 +460,41 @@ async def get_status():
             "playback": _playback_mode,
             "frame_available": _latest_frame is not None,
         })
+
+
+@app.get("/awb")
+async def get_awb():
+    return JSONResponse({
+        "awb_mode": _current_awb_mode,
+        "colour_gains": _current_colour_gains,
+        "modes": ["auto", "daylight", "cloudy", "tungsten",
+                  "fluorescent", "incandescent", "indoor", "off"],
+    })
+
+
+@app.post("/awb")
+async def set_awb(request: Request):
+    global _current_awb_mode, _current_colour_gains
+    body = await request.json()
+    mode = body.get("awb_mode", _current_awb_mode)
+    gains = body.get("colour_gains", _current_colour_gains)
+
+    with _lock:
+        cap_local = _cap
+    if isinstance(cap_local, Picamera2Capture):
+        result = cap_local.set_awb(mode, gains)
+        _current_awb_mode = result["awb_mode"]
+        _current_colour_gains = result["colour_gains"]
+    else:
+        # Non-Picamera2 — just store for reference
+        _current_awb_mode = mode
+        _current_colour_gains = gains
+        log.info("AWB settings saved (non-Picamera2 source)")
+
+    return JSONResponse({
+        "awb_mode": _current_awb_mode,
+        "colour_gains": _current_colour_gains,
+    })
 
 
 @app.get("/stream")

@@ -25,12 +25,17 @@
     mavDot: $('mav-dot'), loraDot: $('lora-dot'),
     errorMessage: $('error-message'),
     // Detection tab
+    detToggle: $('det-toggle'), detToggleLabel: $('det-toggle-label'),
     modelSelect: $('model-select'), modelSwitchBtn: $('model-switch-btn'),
     confSlider: $('conf-slider'), confVal: $('conf-val'),
     saveConfSlider: $('save-conf-slider'), saveConfVal: $('save-conf-val'),
     imgszSelect: $('imgsz-select'),
     skipSlider: $('skip-slider'), skipVal: $('skip-val'),
     applyConfigBtn: $('apply-config-btn'),
+    awbModeSelect: $('awb-mode-select'), awbGainsGroup: $('awb-gains-group'),
+    awbRedSlider: $('awb-red-slider'), awbRedVal: $('awb-red-val'),
+    awbBlueSlider: $('awb-blue-slider'), awbBlueVal: $('awb-blue-val'),
+    applyAwbBtn: $('apply-awb-btn'),
     trackerList: $('tracker-list'), trackerRefresh: $('tracker-refresh'),
     // LoRa
     loraText: $('lora-text'), loraSendBtn: $('lora-send-btn'),
@@ -152,6 +157,7 @@
     connectLoraWS();
     loadModels();
     loadConfig();
+    loadAwb();
     connectCaptureWS();
   }
 
@@ -303,6 +309,7 @@
           state.tracks = Array.isArray(data.tracks) ? data.tracks : [];
           if (data.metrics) {
             state.metrics = data.metrics;
+            if (data.metrics.enabled !== undefined) syncDetToggle(data.metrics.enabled);
             updateMetrics();
           }
           drawOverlay();
@@ -469,6 +476,7 @@
   async function loadConfig() {
     try {
       const cfg = await fetchJSON(`${origin(ports.det)}/config`);
+      if (cfg.enabled !== undefined) syncDetToggle(cfg.enabled);
       if (els.confSlider) {
         els.confSlider.value = Math.round(cfg.confidence * 100);
         setText('conf-val', cfg.confidence.toFixed(2));
@@ -483,6 +491,64 @@
         setText('skip-val', cfg.skip_frames);
       }
     } catch { /* service may not be ready */ }
+  }
+
+  async function toggleDetection() {
+    const enabled = els.detToggle ? els.detToggle.checked : true;
+    if (els.detToggleLabel) els.detToggleLabel.textContent = enabled ? 'ВКЛ' : 'ВЫКЛ';
+    try {
+      await fetchJSON(`${origin(ports.det)}/config`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ enabled }),
+      });
+    } catch (err) {
+      showError('Ошибка переключения детекции: ' + err.message);
+    }
+  }
+
+  function syncDetToggle(enabled) {
+    if (els.detToggle) els.detToggle.checked = enabled;
+    if (els.detToggleLabel) els.detToggleLabel.textContent = enabled ? 'ВКЛ' : 'ВЫКЛ';
+  }
+
+  // ---------------------------------------------------------------------------
+  // AWB (Capture service)
+  // ---------------------------------------------------------------------------
+  async function loadAwb() {
+    try {
+      const data = await fetchJSON(`${origin(ports.cap)}/awb`);
+      if (els.awbModeSelect) els.awbModeSelect.value = data.awb_mode || 'auto';
+      if (data.colour_gains && data.colour_gains.length === 2) {
+        if (els.awbRedSlider) { els.awbRedSlider.value = Math.round(data.colour_gains[0] * 100); setText('awb-red-val', data.colour_gains[0].toFixed(2)); }
+        if (els.awbBlueSlider) { els.awbBlueSlider.value = Math.round(data.colour_gains[1] * 100); setText('awb-blue-val', data.colour_gains[1].toFixed(2)); }
+      }
+      updateAwbGainsVisibility();
+    } catch { /* service may not be ready */ }
+  }
+
+  function updateAwbGainsVisibility() {
+    if (!els.awbGainsGroup || !els.awbModeSelect) return;
+    els.awbGainsGroup.style.display = els.awbModeSelect.value === 'off' ? 'flex' : 'none';
+  }
+
+  async function applyAwb() {
+    const mode = els.awbModeSelect ? els.awbModeSelect.value : 'auto';
+    const body = { awb_mode: mode };
+    if (mode === 'off') {
+      const red = els.awbRedSlider ? parseInt(els.awbRedSlider.value, 10) / 100 : 1.0;
+      const blue = els.awbBlueSlider ? parseInt(els.awbBlueSlider.value, 10) / 100 : 1.0;
+      body.colour_gains = [red, blue];
+    }
+    try {
+      await fetchJSON(`${origin(ports.cap)}/awb`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      });
+    } catch (err) {
+      showError('Ошибка AWB: ' + err.message);
+    }
   }
 
   async function applyConfig() {
@@ -1050,6 +1116,9 @@
       };
     }
 
+    // Detection toggle
+    if (els.detToggle) els.detToggle.addEventListener('change', toggleDetection);
+
     // Detection tab — config
     if (els.confSlider) els.confSlider.addEventListener('input', () => {
       setText('conf-val', (parseInt(els.confSlider.value, 10) / 100).toFixed(2));
@@ -1062,6 +1131,16 @@
     });
     if (els.applyConfigBtn) els.applyConfigBtn.addEventListener('click', applyConfig);
     if (els.modelSwitchBtn) els.modelSwitchBtn.addEventListener('click', switchModel);
+
+    // AWB controls
+    if (els.awbModeSelect) els.awbModeSelect.addEventListener('change', updateAwbGainsVisibility);
+    if (els.awbRedSlider) els.awbRedSlider.addEventListener('input', () => {
+      setText('awb-red-val', (parseInt(els.awbRedSlider.value, 10) / 100).toFixed(2));
+    });
+    if (els.awbBlueSlider) els.awbBlueSlider.addEventListener('input', () => {
+      setText('awb-blue-val', (parseInt(els.awbBlueSlider.value, 10) / 100).toFixed(2));
+    });
+    if (els.applyAwbBtn) els.applyAwbBtn.addEventListener('click', applyAwb);
 
     // Tracker refresh
     if (els.trackerRefresh) els.trackerRefresh.addEventListener('click', async () => {

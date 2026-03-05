@@ -126,6 +126,7 @@ _runtime_save_conf = CONFIDENCE  # min confidence to persist detection in DB
 _runtime_imgsz = int(det_cfg.get("imgsz", 320))  # 320px = 2x faster than 640 on Pi 5
 _runtime_skip = 0            # skip N frames between inferences
 _pending_model: str | None = None  # set by POST /model to trigger hot-swap
+_detection_enabled = True    # pause/resume inference from GUI
 
 _track_first_seen: dict[int, str] = {}  # track_id → ISO timestamp
 
@@ -289,6 +290,14 @@ def _detection_loop() -> None:
             continue
         last_seq = seq
         _frame_number += 1
+
+        # ── Detection paused — clear tracks, pass frame through ──
+        if not _detection_enabled:
+            with _lock:
+                _active_tracks.clear()
+                _annotated_frame = frame
+            time.sleep(0.03)
+            continue
 
         # ── Hot-swap model if requested ──
         if _pending_model is not None:
@@ -523,6 +532,7 @@ def _calc_metrics() -> dict:
     avg_ms = sum(ms_list) / len(ms_list) if ms_list else 0.0
 
     return {
+        "enabled": _detection_enabled,
         "fps": round(fps, 1),
         "avg_frame_ms": round(avg_ms, 1),
         "last_inference_ms": round(last_ms, 1),
@@ -565,6 +575,7 @@ async def serve_media(path: str):
 @app.get("/config")
 async def get_config():
     return JSONResponse({
+        "enabled": _detection_enabled,
         "confidence": round(_runtime_conf, 3),
         "save_confidence": round(_runtime_save_conf, 3),
         "imgsz": _runtime_imgsz,
@@ -577,7 +588,11 @@ async def get_config():
 @app.post("/config")
 async def set_config(request: Request):
     global _runtime_conf, _runtime_save_conf, _runtime_imgsz, _runtime_skip
+    global _detection_enabled
     body = await request.json()
+    if "enabled" in body:
+        _detection_enabled = bool(body["enabled"])
+        log.info("Detection %s", "enabled" if _detection_enabled else "paused")
     if "confidence" in body:
         _runtime_conf = max(0.05, min(1.0, float(body["confidence"])))
     if "save_confidence" in body:
@@ -588,9 +603,10 @@ async def set_config(request: Request):
             _runtime_imgsz = v
     if "skip_frames" in body:
         _runtime_skip = max(0, min(30, int(body["skip_frames"])))
-    log.info("Config updated: conf=%.2f save_conf=%.2f imgsz=%d skip=%d",
-             _runtime_conf, _runtime_save_conf, _runtime_imgsz, _runtime_skip)
+    log.info("Config updated: enabled=%s conf=%.2f save_conf=%.2f imgsz=%d skip=%d",
+             _detection_enabled, _runtime_conf, _runtime_save_conf, _runtime_imgsz, _runtime_skip)
     return JSONResponse({
+        "enabled": _detection_enabled,
         "confidence": round(_runtime_conf, 3),
         "save_confidence": round(_runtime_save_conf, 3),
         "imgsz": _runtime_imgsz,

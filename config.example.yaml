@@ -20,6 +20,15 @@ capture:
   fps: 30
   # Port for the MJPEG / API server
   port: 8001
+  # Auto white balance mode (Picamera2 only):
+  #   "auto", "daylight", "cloudy", "tungsten", "fluorescent", "incandescent", "indoor"
+  #   Set to "off" to use manual colour_gains instead
+  awb_mode: "auto"
+  # Time in seconds to let AWB settle after camera start (default 2.0)
+  awb_settle_time: 2.0
+  # Manual colour gains [red, blue] — used only when awb_mode: "off"
+  # Increase red gain to remove blue tint, increase blue gain to remove yellow tint
+  # colour_gains: [1.5, 1.2]
   # Recording settings (raw video without detection boxes)
   # Detector service also writes annotated video (det_*.avi) to the same directory
   recording:
