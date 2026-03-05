@@ -17,7 +17,7 @@ data/
 logs/
 
 # Models — ignore heavy weights, keep NCNN (optimised for Pi)
-models/*.pt
+# models/*.pt
 models/*.onnx
 models/*.engine
 models/*.torchscript
