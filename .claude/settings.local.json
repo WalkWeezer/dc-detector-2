@@ -13,7 +13,16 @@
       "Bash(pio run:*)",
       "Bash(platformio run:*)",
       "Bash(ls \"c:\\\\Users\\\\borov\\\\source\\\\projects\\\\DC-Detector-v0.2\\\\data\\\\recordings\"\" 2>/dev/null || echo \"directory not found or empty \")",
-      "Bash(dir \"c:\\\\Users\\\\borov\\\\source\\\\projects\\\\DC-Detector-v0.2\\\\models\")"
+      "Bash(dir \"c:\\\\Users\\\\borov\\\\source\\\\projects\\\\DC-Detector-v0.2\\\\models\")",
+      "Bash(python3:*)",
+      "Bash(python -c \"import ast, sys; ast.parse\\(open\\(''tools/pi3b_sim.py''\\).read\\(\\)\\); print\\(''OK''\\)\")",
+      "Bash(python -c \"import ast; ast.parse\\(open\\(''tools/pi3b_sim.py'', encoding=''utf-8''\\).read\\(\\)\\); print\\(''OK''\\)\")",
+      "Bash(head -5 python -c \":*)",
+      "Bash(pip show:*)",
+      "Bash(python tools/analyze_flight_speed.py LOG00024.TXT)",
+      "Bash(python \"c:/Users/borov/source/projects/DC-Detector-v0.2/tools/analyze_flight_speed.py\" \"c:/Users/borov/source/projects/DC-Detector-v0.2/LOG00024.TXT\")",
+      "Bash(timeout /t 10 /nobreak)",
+      "Bash(python \"c:/Users/borov/source/projects/DC-Detector-v0.2/tools/analyze_flight_speed.py\" \"c:/Users/borov/source/projects/DC-Detector-v0.2/LOG00024.TXT\" --debug)"
     ]
   }
 }

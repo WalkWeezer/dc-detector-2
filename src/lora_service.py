@@ -86,7 +86,10 @@ app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], all
 # State
 # ---------------------------------------------------------------------------
 _lock = threading.Lock()
-_connected = False
+_port_open = False       # serial port was opened successfully
+_connected = False       # ESP32 actually responding (last RX < 30s ago)
+_last_rx_time: float = 0.0
+_RX_TIMEOUT = 30.0       # seconds without RX → considered disconnected
 _serial_port = None
 _messages: list[dict] = []
 _ws_clients: list[WebSocket] = []
@@ -107,7 +110,7 @@ _esp_ap_password = ""
 # ---------------------------------------------------------------------------
 
 def _serial_loop() -> None:
-    global _connected, _serial_port, _esp_ap_ssid, _esp_ap_password
+    global _connected, _port_open, _last_rx_time, _serial_port, _esp_ap_ssid, _esp_ap_password
 
     try:
         import serial
@@ -126,15 +129,28 @@ def _serial_loop() -> None:
             time.sleep(RETRY)
 
     with _lock:
-        _connected = True
-    log.info("LoRa serial connection established")
+        _port_open = True
+    log.info("LoRa serial port opened — waiting for data from ESP32")
 
     while True:
         try:
+            # Update _connected based on last RX timestamp
+            with _lock:
+                now = time.time()
+                was_connected = _connected
+                _connected = _port_open and (now - _last_rx_time < _RX_TIMEOUT)
+                if was_connected and not _connected:
+                    log.warning("LoRa ESP32 not responding for %.0fs — marking disconnected", now - _last_rx_time)
+
             if _serial_port.in_waiting > 0:
                 line = _serial_port.readline().decode("utf-8", errors="replace").strip()
                 if line:
                     ts = time.time()
+                    with _lock:
+                        _last_rx_time = ts
+                        if not _connected:
+                            _connected = True
+                            log.info("LoRa ESP32 connection established (first data received)")
                     msg = {
                         "direction": "rx",
                         "data": line,
