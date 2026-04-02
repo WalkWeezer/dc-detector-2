@@ -406,15 +406,15 @@ def _start_recording_internal(rec_id: str | None = None) -> str:
     return _recording_path
 
 
-def _stop_recording_internal() -> str | None:
+def _stop_recording_internal() -> tuple:
+    """Stop recording; returns (path, writer) — caller must release writer outside the lock."""
     global _recording, _video_writer, _recording_path
     path = _recording_path
     _recording = False
-    if _video_writer is not None:
-        _video_writer.release()
-        _video_writer = None
+    writer = _video_writer
+    _video_writer = None
     log.info("Recording stopped: %s", path)
-    return path
+    return path, writer
 
 
 # ---------------------------------------------------------------------------
@@ -557,13 +557,16 @@ async def recording_start(request: Request):
     except Exception:
         pass
     rec_id = body.get("id") if isinstance(body, dict) else None
+    old_writer = None
     with _lock:
         if _recording and rec_id:
-            # Restart with the shared ID so timestamps match the detector recording
-            _stop_recording_internal()
+            _, old_writer = _stop_recording_internal()
         elif _recording:
             return JSONResponse({"status": "already recording", "path": _recording_path})
         path = _start_recording_internal(rec_id=rec_id)
+    if old_writer is not None:
+        loop = asyncio.get_event_loop()
+        await loop.run_in_executor(None, old_writer.release)
     await _broadcast({"event": "recording_started", "path": path})
     return JSONResponse({"status": "started", "path": path})
 
@@ -573,7 +576,10 @@ async def recording_stop():
     with _lock:
         if not _recording:
             return JSONResponse({"status": "not recording"})
-        path = _stop_recording_internal()
+        path, writer = _stop_recording_internal()
+    if writer is not None:
+        loop = asyncio.get_event_loop()
+        await loop.run_in_executor(None, writer.release)
     await _broadcast({"event": "recording_stopped", "path": path})
     return JSONResponse({"status": "stopped", "path": path})
 
@@ -629,14 +635,18 @@ async def start_playback(req: PlaybackRequest):
     fp = os.path.join(REC_DIR, req.filename)
     if not os.path.isfile(fp):
         return JSONResponse({"error": "file not found"}, status_code=404)
+    old_writer = None
     with _lock:
         if _recording:
-            _stop_recording_internal()
+            _, old_writer = _stop_recording_internal()
         if _cap is not None:
             _cap.release()
         _cap = cv2.VideoCapture(fp)
         _apply_props(_cap)
         _playback_mode = True
+    if old_writer is not None:
+        loop = asyncio.get_event_loop()
+        await loop.run_in_executor(None, old_writer.release)
     log.info("Playback started: %s", fp)
     return JSONResponse({"status": "playback", "file": req.filename})
 
