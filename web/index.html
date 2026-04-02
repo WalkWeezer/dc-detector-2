@@ -64,6 +64,7 @@
           <button class="tab-btn" data-tab="lora" role="tab">LoRa</button>
           <button class="tab-btn" data-tab="sessions" role="tab">Обнаружения</button>
           <button class="tab-btn" data-tab="recordings" role="tab">Записи</button>
+          <button class="tab-btn" data-tab="system" role="tab">Система</button>
         </nav>
 
         <div class="sidebar-content">
@@ -242,6 +243,43 @@
           <!-- ── Вкладка: Записи ── -->
           <div id="tab-recordings" class="tab-panel tab-panel-fill" role="tabpanel">
             <div id="rec-list" class="rec-list fill-list">Загрузка...</div>
+          </div>
+
+          <!-- ── Вкладка: Система ── -->
+          <div id="tab-system" class="tab-panel" role="tabpanel">
+
+            <section class="card">
+              <header><h2>Ресурсы платы</h2><span class="link-btn" id="sys-refresh">↺</span></header>
+              <div class="form-col">
+                <div class="sys-row">
+                  <span class="sys-label">CPU</span>
+                  <div class="bat-bar-wrap sys-bar-wrap"><div class="bat-bar sys-bar" id="sys-cpu-bar"></div></div>
+                  <span class="sys-pct" id="sys-cpu-pct">—</span>
+                </div>
+                <div class="sys-row">
+                  <span class="sys-label">RAM</span>
+                  <div class="bat-bar-wrap sys-bar-wrap"><div class="bat-bar sys-bar" id="sys-ram-bar"></div></div>
+                  <span class="sys-pct" id="sys-ram-pct">—</span>
+                </div>
+                <div class="sys-row">
+                  <span class="sys-label">Температура</span>
+                  <div class="bat-bar-wrap sys-bar-wrap"><div class="bat-bar sys-bar" id="sys-temp-bar"></div></div>
+                  <span class="sys-pct" id="sys-temp-val">—</span>
+                </div>
+                <div class="sys-status" id="sys-throttle-status">Данные не получены</div>
+              </div>
+            </section>
+
+            <section class="card">
+              <header><h2>Управление нагрузкой</h2></header>
+              <div class="form-col">
+                <button id="sys-eco-btn" class="accent full-w">⚡ Экономный режим</button>
+                <p class="sys-hint">imgsz=160, пропуск=4 — снижает нагрузку CPU в ~3 раза</p>
+                <button id="sys-normal-btn" class="full-w">↺ Нормальный режим</button>
+                <p class="sys-hint">imgsz=320, пропуск=0 — стандартные настройки</p>
+              </div>
+            </section>
+
           </div>
 
         </div>

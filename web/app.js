@@ -57,6 +57,13 @@
     wsDetLog: $('ws-det-log'), wsMavLog: $('ws-mav-log'), wsLoraLog: $('ws-lora-log'),
     // Log popup
     logToggle: $('log-toggle'), logPopup: $('log-popup'), logPopupClose: $('log-popup-close'),
+    // System tab
+    sysCpuBar: $('sys-cpu-bar'), sysCpuPct: $('sys-cpu-pct'),
+    sysRamBar: $('sys-ram-bar'), sysRamPct: $('sys-ram-pct'),
+    sysTempBar: $('sys-temp-bar'), sysTempVal: $('sys-temp-val'),
+    sysThrottleStatus: $('sys-throttle-status'),
+    sysEcoBtn: $('sys-eco-btn'), sysNormalBtn: $('sys-normal-btn'),
+    sysRefresh: $('sys-refresh'),
   };
 
   const overlayCtx = els.overlay ? els.overlay.getContext('2d') : null;
@@ -159,6 +166,8 @@
     loadConfig();
     loadAwb();
     connectCaptureWS();
+    loadSystemStats();
+    setInterval(loadSystemStats, 3000);
   }
 
   // ---------------------------------------------------------------------------
@@ -1185,6 +1194,9 @@
     // Log popup
     if (els.logToggle) els.logToggle.addEventListener('click', toggleLogPopup);
     if (els.logPopupClose) els.logPopupClose.addEventListener('click', closeLogPopup);
+    if (els.sysEcoBtn) els.sysEcoBtn.addEventListener('click', setEcoMode);
+    if (els.sysNormalBtn) els.sysNormalBtn.addEventListener('click', setNormalMode);
+    if (els.sysRefresh) els.sysRefresh.addEventListener('click', loadSystemStats);
   }
 
   // ---------------------------------------------------------------------------
@@ -1222,6 +1234,84 @@
   }
   function closeLogPopup() {
     if (els.logPopup) els.logPopup.classList.add('hidden');
+  }
+
+  // ---------------------------------------------------------------------------
+  // System monitoring
+  // ---------------------------------------------------------------------------
+
+  function setSysBar(barEl, pctEl, value, max, unit, colorFn) {
+    if (!barEl || !pctEl) return;
+    const pct = Math.min(100, Math.max(0, (value / max) * 100));
+    barEl.style.width = pct + '%';
+    barEl.style.background = colorFn(pct);
+    pctEl.textContent = value !== null && value !== undefined
+      ? (Number.isInteger(value) ? value : value.toFixed(1)) + unit
+      : '—';
+  }
+
+  async function loadSystemStats() {
+    try {
+      const d = await fetchJSON('/api/system', { timeout: 3000 });
+
+      // CPU bar (green→orange→red)
+      setSysBar(els.sysCpuBar, els.sysCpuPct, d.cpu_percent, 100, '%',
+        p => p < 60 ? '#40ff80' : p < 85 ? '#ffa040' : '#ff5460');
+
+      // RAM bar
+      setSysBar(els.sysRamBar, els.sysRamPct,
+        d.ram_used_mb, d.ram_total_mb,
+        `МБ / ${d.ram_total_mb}МБ`,
+        p => p < 60 ? '#40ff80' : p < 85 ? '#ffa040' : '#ff5460');
+
+      // Temp bar (max 100°C)
+      setSysBar(els.sysTempBar, els.sysTempVal, d.temp_c, 100, '°C',
+        p => p < 55 ? '#40ff80' : p < 75 ? '#ffa040' : '#ff5460');
+
+      // Throttle status
+      if (els.sysThrottleStatus) {
+        const t = d.throttled;
+        if (!t) {
+          els.sysThrottleStatus.textContent = 'Данные vcgencmd недоступны';
+          els.sysThrottleStatus.className = 'sys-status';
+        } else if (t.undervoltage_now || t.throttled_now) {
+          els.sysThrottleStatus.textContent = '⚠ ' +
+            (t.undervoltage_now ? 'Недостаточное питание! ' : '') +
+            (t.throttled_now ? 'Троттлинг CPU!' : '');
+          els.sysThrottleStatus.className = 'sys-status danger';
+        } else if (t.undervoltage_occurred || t.throttled_occurred) {
+          els.sysThrottleStatus.textContent = '⚠ Были проблемы с питанием с момента загрузки';
+          els.sysThrottleStatus.className = 'sys-status warn';
+        } else {
+          els.sysThrottleStatus.textContent = '✓ Питание в норме';
+          els.sysThrottleStatus.className = 'sys-status ok';
+        }
+      }
+    } catch { /* ignore — service may be starting */ }
+  }
+
+  async function setEcoMode() {
+    try {
+      await fetchJSON(`${origin(ports.det)}/config`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ imgsz: 160, skip_frames: 4 }),
+      });
+      if (els.imgszSelect) els.imgszSelect.value = '160';
+      if (els.skipSlider) { els.skipSlider.value = 4; setText('skip-val', 4); }
+    } catch (e) { console.warn('Eco mode failed:', e.message); }
+  }
+
+  async function setNormalMode() {
+    try {
+      await fetchJSON(`${origin(ports.det)}/config`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ imgsz: 320, skip_frames: 0 }),
+      });
+      if (els.imgszSelect) els.imgszSelect.value = '320';
+      if (els.skipSlider) { els.skipSlider.value = 0; setText('skip-val', 0); }
+    } catch (e) { console.warn('Normal mode failed:', e.message); }
   }
 
   // ---------------------------------------------------------------------------

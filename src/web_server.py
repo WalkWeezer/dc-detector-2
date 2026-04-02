@@ -6,10 +6,13 @@ GET  /              Web UI (index.html)
 GET  /api/services  Status of all sub-services
 """
 
+import asyncio
 import os
+import subprocess
 import sys
 from contextlib import asynccontextmanager
 
+import psutil
 from fastapi import FastAPI
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
@@ -51,6 +54,60 @@ async def services():
         "detection": {"port": det_port, "base": f"http://localhost:{det_port}"},
         "mavlink": {"port": mav_port, "base": f"http://localhost:{mav_port}"},
         "lora": {"port": lora_port, "base": f"http://localhost:{lora_port}"},
+    })
+
+
+def _vcgencmd(cmd: str) -> str:
+    try:
+        return subprocess.check_output(["vcgencmd", cmd], timeout=1).decode().strip()
+    except Exception:
+        return ""
+
+
+@app.get("/api/system")
+async def system_stats():
+    loop = asyncio.get_event_loop()
+    cpu = psutil.cpu_percent(interval=None)
+    mem = psutil.virtual_memory()
+
+    temp_str, throttle_str = await asyncio.gather(
+        loop.run_in_executor(None, _vcgencmd, "measure_temp"),
+        loop.run_in_executor(None, _vcgencmd, "get_throttled"),
+    )
+
+    temp = None
+    if temp_str:
+        try:
+            temp = round(float(temp_str.split("=")[1].replace("'C", "")), 1)
+        except Exception:
+            pass
+    if temp is None:
+        try:
+            with open("/sys/class/thermal/thermal_zone0/temp") as f:
+                temp = round(int(f.read().strip()) / 1000, 1)
+        except Exception:
+            pass
+
+    throttled = None
+    if throttle_str:
+        try:
+            v = int(throttle_str.split("=")[1], 16)
+            throttled = {
+                "undervoltage_now": bool(v & 0x1),
+                "throttled_now": bool(v & 0x4),
+                "undervoltage_occurred": bool(v & 0x10000),
+                "throttled_occurred": bool(v & 0x40000),
+            }
+        except Exception:
+            pass
+
+    return JSONResponse({
+        "cpu_percent": round(cpu, 1),
+        "ram_percent": round(mem.percent, 1),
+        "ram_used_mb": mem.used // (1024 * 1024),
+        "ram_total_mb": mem.total // (1024 * 1024),
+        "temp_c": temp,
+        "throttled": throttled,
     })
 
 

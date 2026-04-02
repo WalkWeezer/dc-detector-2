@@ -597,6 +597,17 @@ pre.log {
   to   { opacity: 1; transform: translateX(0); }
 }
 
+/* ===== System tab ===== */
+.sys-row { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; }
+.sys-label { font-size: 0.78rem; color: var(--text-dim); min-width: 90px; flex-shrink: 0; }
+.sys-bar-wrap { flex: 1; }
+.sys-pct { font-size: 0.78rem; min-width: 72px; text-align: right; flex-shrink: 0; }
+.sys-status { font-size: 0.78rem; padding: 5px 8px; border-radius: 5px; text-align: center; margin-top: 4px; background: #1e2030; color: var(--text-dim); }
+.sys-status.ok     { background: #0d2b1a; color: #40ff80; }
+.sys-status.warn   { background: #2b1f00; color: #ffa040; }
+.sys-status.danger { background: #2b0f0f; color: #ff5460; }
+.sys-hint { font-size: 0.72rem; color: var(--text-dim); margin: 2px 0 10px; }
+
 /* ===== Responsive ===== */
 @media (max-width: 1100px) {
   .main-grid { grid-template-columns: 1fr; grid-template-rows: 1fr 1fr; }
