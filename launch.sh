@@ -9,13 +9,19 @@ echo "============================================================"
 echo " DC-Detector v0.2 — Linux / Raspberry Pi launcher"
 echo "============================================================"
 
-# Auto-update from git repository
+# Auto-update from git repository (only if internet is available)
 if git rev-parse --is-inside-work-tree &>/dev/null 2>&1; then
-    echo "Updating repository..."
-    git stash
-    git pull
-    echo "Repository updated."
-    echo ""
+    if ping -c 1 -W 2 8.8.8.8 &>/dev/null 2>&1; then
+        echo "Updating repository..."
+        rm -f .git/index.lock
+        git stash
+        git pull
+        echo "Repository updated."
+        echo ""
+    else
+        echo "No internet connection — skipping update."
+        echo ""
+    fi
 fi
 
 PYTHON=python3
