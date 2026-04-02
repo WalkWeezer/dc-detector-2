@@ -397,7 +397,7 @@ class _NCNNModel:
         import ncnn
         self.net = ncnn.Net()
         self.net.opt.use_vulkan_compute = False
-        self.net.opt.num_threads = 4
+        self.net.opt.num_threads = 2
         self.net.load_param(os.path.join(ncnn_dir, "model.ncnn.param"))
         self.net.load_model(os.path.join(ncnn_dir, "model.ncnn.bin"))
         self.names = _load_names(ncnn_dir)
@@ -1007,7 +1007,7 @@ async def _annotated_mjpeg():
             b"--frame\r\n"
             b"Content-Type: image/jpeg\r\n\r\n" + jpeg.tobytes() + b"\r\n"
         )
-        await asyncio.sleep(1.0 / max(SRC_FPS, 1))
+        await asyncio.sleep(1.0 / max(min(SRC_FPS, 10), 1))
 
 
 @app.get("/stream")

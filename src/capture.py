@@ -49,6 +49,7 @@ REC_ENABLED = cap_cfg.get("recording", {}).get("enabled", True)
 REC_DIR = cap_cfg.get("recording", {}).get("directory", "./data/recordings")
 REC_CODEC = cap_cfg.get("recording", {}).get("codec", "MJPG")
 JPEG_QUALITY = int(cap_cfg.get("jpeg_quality", 80))
+STREAM_FPS = int(cap_cfg.get("stream_fps", 10))  # web stream FPS (< camera FPS to reduce peak load)
 AWB_MODE = cap_cfg.get("awb_mode", "auto").lower()
 AWB_SETTLE = float(cap_cfg.get("awb_settle_time", 2.0))
 COLOUR_GAINS = cap_cfg.get("colour_gains", None)  # [red, blue] or None
@@ -414,7 +415,7 @@ def _stop_recording_internal() -> str | None:
 
 async def _mjpeg_generator():
     _encode_params = [cv2.IMWRITE_JPEG_QUALITY, JPEG_QUALITY]
-    _interval = 1.0 / max(FPS, 1)
+    _interval = 1.0 / max(STREAM_FPS, 1)
     while True:
         with _lock:
             frame = _latest_frame
