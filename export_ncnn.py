@@ -9,6 +9,7 @@ Usage:
 
 import argparse
 import glob
+import json
 import os
 import sys
 
@@ -25,6 +26,16 @@ def export_one(pt_path: str, imgsz: int) -> bool:
         model = YOLO(pt_path)
         model.export(format="ncnn", imgsz=imgsz)
         if os.path.isdir(ncnn_dir):
+            # Save class names so the detector never needs torch at runtime
+            try:
+                names = model.names or {}
+                if names:
+                    names_list = [names.get(i, str(i)) for i in range(max(names) + 1)]
+                    with open(os.path.join(ncnn_dir, "names.json"), "w", encoding="utf-8") as nf:
+                        json.dump(names_list, nf, ensure_ascii=False)
+                    print(f"  [ok] Saved {len(names_list)} class names → {ncnn_dir}/names.json")
+            except Exception as e:
+                print(f"  [warn] Could not save names.json: {e}")
             size_mb = sum(
                 os.path.getsize(os.path.join(dp, f))
                 for dp, _, fns in os.walk(ncnn_dir) for f in fns

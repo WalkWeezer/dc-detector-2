@@ -227,7 +227,7 @@ def _stop_det_recording() -> str | None:
 
 
 # ---------------------------------------------------------------------------
-# Detection loop
+# Detection loop — NCNN-native inference (no PyTorch at runtime)
 # ---------------------------------------------------------------------------
 
 def _ncnn_available() -> bool:
@@ -265,45 +265,296 @@ def _resolve_model_path(path: str) -> str:
     return path
 
 
+def _ncnn_anchors(imgsz: int) -> int:
+    """Total anchor proposals for YOLOv8/11 at a given input size (strides 8/16/32)."""
+    return (imgsz // 8) ** 2 + (imgsz // 16) ** 2 + (imgsz // 32) ** 2
+
+
+def _iou(a: tuple, b: tuple) -> float:
+    ax1, ay1, ax2, ay2 = a
+    bx1, by1, bx2, by2 = b
+    ix1, iy1 = max(ax1, bx1), max(ay1, by1)
+    ix2, iy2 = min(ax2, bx2), min(ay2, by2)
+    inter = max(0, ix2 - ix1) * max(0, iy2 - iy1)
+    if inter == 0:
+        return 0.0
+    union = (ax2 - ax1) * (ay2 - ay1) + (bx2 - bx1) * (by2 - by1) - inter
+    return inter / union if union > 0 else 0.0
+
+
+class _SimpleTracker:
+    """Lightweight IoU tracker — stable track IDs without ByteTrack or torch."""
+
+    def __init__(self, iou_thresh: float = 0.3, max_lost: int = 15):
+        self._next_id = 1
+        self._tracks: dict = {}  # id -> {"bbox": (x1,y1,x2,y2), "lost": int}
+        self.iou_thresh = iou_thresh
+        self.max_lost = max_lost
+
+    def update(self, detections: list) -> list:
+        """Match detections to existing tracks; return detections with track_id."""
+        if not self._tracks:
+            result = []
+            for det in detections:
+                tid = self._next_id; self._next_id += 1
+                self._tracks[tid] = {"bbox": (det["x1"], det["y1"], det["x2"], det["y2"]), "lost": 0}
+                result.append({**det, "track_id": tid})
+            return result
+
+        track_ids = list(self._tracks.keys())
+        track_bboxes = [self._tracks[t]["bbox"] for t in track_ids]
+
+        iou_mat = np.zeros((len(detections), len(track_ids)))
+        for di, det in enumerate(detections):
+            det_box = (det["x1"], det["y1"], det["x2"], det["y2"])
+            for ti, tbox in enumerate(track_bboxes):
+                iou_mat[di, ti] = _iou(det_box, tbox)
+
+        matched_dets: set = set()
+        matched_tracks: set = set()
+        matches = []
+
+        if iou_mat.size > 0:
+            try:
+                import lap
+                cost = 1.0 - iou_mat
+                _, row_ind, _ = lap.lapjv(cost, extend_cost=True,
+                                          cost_limit=1.0 - self.iou_thresh)
+                for di, ti in enumerate(row_ind):
+                    if ti >= 0 and iou_mat[di, ti] >= self.iou_thresh:
+                        matches.append((di, ti))
+                        matched_dets.add(di)
+                        matched_tracks.add(ti)
+            except Exception:
+                flat = iou_mat.copy()
+                for _ in range(min(len(detections), len(track_ids))):
+                    if flat.max() < self.iou_thresh:
+                        break
+                    di, ti = divmod(int(np.argmax(flat)), flat.shape[1])
+                    matches.append((di, ti))
+                    matched_dets.add(di)
+                    matched_tracks.add(ti)
+                    flat[di, :] = 0
+                    flat[:, ti] = 0
+
+        result = []
+        for di, ti in matches:
+            det = detections[di]
+            tid = track_ids[ti]
+            self._tracks[tid] = {"bbox": (det["x1"], det["y1"], det["x2"], det["y2"]), "lost": 0}
+            result.append({**det, "track_id": tid})
+
+        for di, det in enumerate(detections):
+            if di not in matched_dets:
+                tid = self._next_id; self._next_id += 1
+                self._tracks[tid] = {"bbox": (det["x1"], det["y1"], det["x2"], det["y2"]), "lost": 0}
+                result.append({**det, "track_id": tid})
+
+        for ti, tid in enumerate(track_ids):
+            if ti not in matched_tracks:
+                self._tracks[tid]["lost"] += 1
+                if self._tracks[tid]["lost"] > self.max_lost:
+                    del self._tracks[tid]
+
+        return result
+
+
+def _load_names(ncnn_dir: str) -> dict:
+    """Load class names from names.json; on first run extracts from .pt and caches."""
+    names_file = os.path.join(ncnn_dir, "names.json")
+    if os.path.isfile(names_file):
+        try:
+            with open(names_file, "r", encoding="utf-8") as f:
+                names_list = json.load(f)
+            return {i: n for i, n in enumerate(names_list)}
+        except Exception:
+            pass
+
+    # One-time extraction from the corresponding .pt file — saves names.json so
+    # torch is never needed again after this first load.
+    pt_path = ncnn_dir.replace("_ncnn_model", ".pt")
+    if os.path.isfile(pt_path):
+        try:
+            from ultralytics import YOLO as _YOLO
+            names = _YOLO(pt_path).names or {}
+            if names:
+                names_list = [names.get(i, str(i)) for i in range(max(names) + 1)]
+                with open(names_file, "w", encoding="utf-8") as f:
+                    json.dump(names_list, f, ensure_ascii=False)
+                log.info("Saved class names → %s", names_file)
+                return names
+        except Exception as exc:
+            log.warning("Could not extract class names from %s: %s", pt_path, exc)
+
+    log.warning("No names.json for %s — numeric class IDs will be used", ncnn_dir)
+    return {}
+
+
+class _NCNNModel:
+    """Direct NCNN inference — PyTorch is never imported at runtime."""
+
+    def __init__(self, ncnn_dir: str):
+        import ncnn
+        self.net = ncnn.Net()
+        self.net.opt.use_vulkan_compute = False
+        self.net.opt.num_threads = 4
+        self.net.load_param(os.path.join(ncnn_dir, "model.ncnn.param"))
+        self.net.load_model(os.path.join(ncnn_dir, "model.ncnn.bin"))
+        self.names = _load_names(ncnn_dir)
+        log.info("NCNN model loaded: %s (%d classes)", ncnn_dir, len(self.names))
+
+    def predict(self, frame: np.ndarray, conf_thresh: float, imgsz: int) -> list:
+        import ncnn
+        h0, w0 = frame.shape[:2]
+        mat_in = ncnn.Mat.from_pixels_resize(
+            frame, ncnn.Mat.PixelType.PIXEL_BGR2RGB, w0, h0, imgsz, imgsz
+        )
+        mat_in.substract_mean_normalize([0.0, 0.0, 0.0], [1 / 255.0, 1 / 255.0, 1 / 255.0])
+
+        ex = self.net.create_extractor()
+        ex.input(self.net.input_names()[0], mat_in)
+        ret, mat_out = ex.extract(self.net.output_names()[0])
+        if ret != 0:
+            return []
+
+        out = np.array(mat_out)
+        if out.ndim == 1:
+            n = _ncnn_anchors(imgsz)
+            if out.size % n == 0:
+                out = out.reshape(-1, n)
+            else:
+                log.warning("Unexpected NCNN output size %d for imgsz=%d", out.size, imgsz)
+                return []
+        if out.ndim != 2 or out.shape[0] < 5:
+            log.warning("Unexpected NCNN output shape: %s", out.shape)
+            return []
+
+        scale_x, scale_y = w0 / imgsz, h0 / imgsz
+        boxes_xywh, scores, class_ids = [], [], []
+
+        for i in range(out.shape[1]):
+            cls_scores = out[4:, i]
+            cls_id = int(np.argmax(cls_scores))
+            score = float(cls_scores[cls_id])
+            if score < conf_thresh:
+                continue
+            cx, cy, bw, bh = out[0, i], out[1, i], out[2, i], out[3, i]
+            boxes_xywh.append([(cx - bw / 2) * scale_x, (cy - bh / 2) * scale_y,
+                                bw * scale_x, bh * scale_y])
+            scores.append(score)
+            class_ids.append(cls_id)
+
+        if not boxes_xywh:
+            return []
+
+        indices = cv2.dnn.NMSBoxes(boxes_xywh, scores, conf_thresh, 0.45)
+        if len(indices) == 0:
+            return []
+
+        result = []
+        for idx in np.array(indices).flatten():
+            x1, y1, bw, bh = boxes_xywh[idx]
+            result.append({
+                "x1": max(0, int(x1)), "y1": max(0, int(y1)),
+                "x2": min(w0, int(x1 + bw)), "y2": min(h0, int(y1 + bh)),
+                "conf": scores[idx], "cls_id": class_ids[idx],
+            })
+        return result
+
+
+class _UltralyticsModel:
+    """Ultralytics YOLO wrapper — fallback for .pt models when NCNN unavailable."""
+
+    def __init__(self, model_path: str):
+        from ultralytics import YOLO
+        self._model = YOLO(model_path)
+        self.names = self._model.names or {}
+
+    def predict(self, frame: np.ndarray, conf_thresh: float, imgsz: int) -> list:
+        results = self._model.predict(frame, conf=conf_thresh, imgsz=imgsz, verbose=False)
+        detections = []
+        if results and results[0].boxes is not None:
+            boxes = results[0].boxes
+            for i in range(len(boxes)):
+                box = boxes[i]
+                x1, y1, x2, y2 = box.xyxy[0].cpu().numpy().astype(int)
+                detections.append({
+                    "x1": int(x1), "y1": int(y1), "x2": int(x2), "y2": int(y2),
+                    "conf": float(box.conf[0]), "cls_id": int(box.cls[0]),
+                })
+        return detections
+
+
+def _load_model(resolved: str, original: str):
+    """Load _NCNNModel for ncnn dirs, _UltralyticsModel for .pt fallback."""
+    global _current_model_path
+
+    if resolved.endswith("_ncnn_model") and os.path.isdir(resolved):
+        try:
+            m = _NCNNModel(resolved)
+            _current_model_path = resolved
+            return m
+        except Exception as exc:
+            log.warning("NCNN load failed (%s), trying .pt fallback: %s", resolved, exc)
+
+    for path in ([resolved, original] if resolved != original else [original]):
+        if not os.path.isfile(path):
+            continue
+        try:
+            m = _UltralyticsModel(path)
+            _current_model_path = path
+            log.info("Loaded ultralytics model: %s", path)
+            return m
+        except Exception as exc:
+            log.warning("Ultralytics load failed %s: %s", path, exc)
+
+    return None
+
+
+def _draw_boxes(frame: np.ndarray, detections: list, names: dict) -> np.ndarray:
+    """Draw bounding boxes and labels onto a copy of frame."""
+    out = frame.copy()
+    for det in detections:
+        x1, y1, x2, y2 = det["x1"], det["y1"], det["x2"], det["y2"]
+        conf = det["conf"]
+        cls_name = names.get(det["cls_id"], str(det["cls_id"]))
+        tid = det.get("track_id", -1)
+        label = f"#{tid} {cls_name} {conf:.2f}" if tid >= 0 else f"{cls_name} {conf:.2f}"
+        cv2.rectangle(out, (x1, y1), (x2, y2), (0, 255, 0), 2)
+        (lw, lh), _ = cv2.getTextSize(label, cv2.FONT_HERSHEY_SIMPLEX, 0.5, 1)
+        ly = max(y1 - 4, lh + 4)
+        cv2.rectangle(out, (x1, ly - lh - 4), (x1 + lw, ly), (0, 255, 0), -1)
+        cv2.putText(out, label, (x1, ly - 2),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 0), 1, cv2.LINE_AA)
+    return out
+
+
 def _detection_loop() -> None:
     global _annotated_frame, _frame_number, _current_model_path
     global _pending_model, _last_inference_ms
 
     os.makedirs(_session_dir, exist_ok=True)
 
-    # Wait for capture service to become available
     log.info("Waiting for capture service at %s ...", _FRAME_URL)
     while _grab_frame() is None:
         time.sleep(1)
     log.info("Capture service is ready")
 
-    # Load YOLO model (prefer NCNN if available, fallback to .pt)
-    from ultralytics import YOLO
     resolved = _resolve_model_path(MODEL_PATH)
-    model = None
-    for attempt_path in [resolved, MODEL_PATH]:
-        try:
-            model = YOLO(attempt_path)
-            _current_model_path = attempt_path
-            log.info("Loaded YOLO model: %s", attempt_path)
-            break
-        except Exception as exc:
-            log.warning("Failed to load model %s: %s", attempt_path, exc)
-            if attempt_path != MODEL_PATH:
-                log.info("Falling back to original model: %s", MODEL_PATH)
+    model = _load_model(resolved, MODEL_PATH)
     if model is None:
         log.error("All model load attempts failed")
         return
 
+    tracker = _SimpleTracker()
+
     while True:
-        # ── Always grab the freshest frame from capture ──
         frame = _grab_frame()
         if frame is None:
             time.sleep(0.1)
             continue
         _frame_number += 1
 
-        # ── Detection paused — clear tracks, pass frame through ──
         if not _detection_enabled:
             with _lock:
                 _active_tracks.clear()
@@ -311,114 +562,77 @@ def _detection_loop() -> None:
             time.sleep(0.03)
             continue
 
-        # ── Hot-swap model if requested ──
         if _pending_model is not None:
             new_path = _pending_model
             _pending_model = None
-            try:
-                from ultralytics import YOLO as _YOLO
-                resolved = _resolve_model_path(new_path)
-                model = _YOLO(resolved)
-                _current_model_path = resolved
-                log.info("Hot-swapped model to: %s", resolved)
-            except Exception as exc:
-                log.error("Model swap failed: %s", exc)
+            new_model = _load_model(_resolve_model_path(new_path), new_path)
+            if new_model is not None:
+                model = new_model
+                tracker = _SimpleTracker()
+                log.info("Hot-swapped model to: %s", _current_model_path)
+            else:
+                log.error("Model swap failed: %s", new_path)
 
         ts = datetime.datetime.now().isoformat(timespec="milliseconds")
         t0 = time.perf_counter()
 
-        # Run detection + tracking
         try:
-            results = model.track(
-                frame,
-                conf=_runtime_conf,
-                imgsz=_runtime_imgsz,
-                persist=True,
-                tracker=f"{TRACKER}.yaml",
-                verbose=False,
-            )
+            detections = model.predict(frame, _runtime_conf, _runtime_imgsz)
+            tracked = tracker.update(detections)
         except Exception as exc:
             log.error("Detection error: %s", exc)
-            # If NCNN runtime missing, fall back to .pt automatically
-            if "ncnn" in str(exc).lower():
-                pt_path = _current_model_path.replace("_ncnn_model", ".pt")
-                if pt_path != _current_model_path and os.path.isfile(pt_path):
-                    log.warning("NCNN runtime unavailable — auto-fallback to %s", pt_path)
-                    try:
-                        model = YOLO(pt_path)
-                        _current_model_path = pt_path
-                        log.info("Fallback model loaded: %s", pt_path)
-                    except Exception as exc2:
-                        log.error("Fallback model load failed: %s", exc2)
             continue
 
         elapsed_ms = (time.perf_counter() - t0) * 1000.0
-
-        # Update metrics
         now = time.time()
         with _metrics_lock:
             _fps_times.append(now)
             _frame_ms.append(elapsed_ms)
             _last_inference_ms = elapsed_ms
 
-        current_tracks: dict[int, dict] = {}
-        if results and results[0].boxes is not None:
-            boxes = results[0].boxes
-            for i in range(len(boxes)):
-                box = boxes[i]
-                x1, y1, x2, y2 = box.xyxy[0].cpu().numpy().astype(int)
-                w, h = int(x2 - x1), int(y2 - y1)
-                conf = float(box.conf[0])
-                cls_id = int(box.cls[0])
-                cls_name = model.names.get(cls_id, str(cls_id))
-                track_id = int(box.id[0]) if box.id is not None else -1
+        current_tracks: dict = {}
+        for det in tracked:
+            x1, y1, x2, y2 = det["x1"], det["y1"], det["x2"], det["y2"]
+            conf = det["conf"]
+            cls_name = model.names.get(det["cls_id"], str(det["cls_id"]))
+            track_id = det["track_id"]
 
-                # Track first seen
-                if track_id >= 0 and track_id not in _track_first_seen:
-                    _track_first_seen[track_id] = ts
+            if track_id not in _track_first_seen:
+                _track_first_seen[track_id] = ts
 
-                track_info = {
-                    "track_id": track_id,
-                    "class_name": cls_name,
-                    "confidence": round(conf, 3),
-                    "bbox": {"x": int(x1), "y": int(y1), "w": w, "h": h},
-                    "frame_number": _frame_number,
-                    "timestamp": ts,
-                    "first_seen": _track_first_seen.get(track_id, ts),
-                }
+            jpeg_name = f"track_{track_id}.jpg"
+            gif_name = f"track_{track_id}.gif"
+            jpeg_path = os.path.join(_session_dir, jpeg_name)
+            gif_path = os.path.join(_session_dir, gif_name)
+            jpeg_rel = f"session_{_session_id}/{jpeg_name}"
+            gif_rel = f"session_{_session_id}/{gif_name}"
 
-                # Save JPEG crop on first appearance
-                jpeg_rel = ""
-                gif_rel = ""
-                if track_id >= 0:
-                    jpeg_name = f"track_{track_id}.jpg"
-                    gif_name = f"track_{track_id}.gif"
-                    jpeg_path = os.path.join(_session_dir, jpeg_name)
-                    gif_path = os.path.join(_session_dir, gif_name)
-                    jpeg_rel = f"session_{_session_id}/{jpeg_name}"
-                    gif_rel = f"session_{_session_id}/{gif_name}"
+            if not os.path.exists(jpeg_path):
+                crop = _safe_crop(frame, x1, y1, x2, y2)
+                cv2.imwrite(jpeg_path, crop)
+                log.info("Saved JPEG crop: %s", jpeg_path)
 
-                    if not os.path.exists(jpeg_path):
-                        crop = _safe_crop(frame, x1, y1, x2, y2)
-                        cv2.imwrite(jpeg_path, crop)
-                        log.info("Saved JPEG crop: %s", jpeg_path)
+            _buffer_gif_frame(track_id, frame, x1, y1, x2, y2, gif_path)
 
-                    # Buffer frames for GIF
-                    _buffer_gif_frame(track_id, frame, x1, y1, x2, y2, gif_path)
+            current_tracks[track_id] = {
+                "track_id": track_id,
+                "class_name": cls_name,
+                "confidence": round(conf, 3),
+                "bbox": {"x": x1, "y": y1, "w": x2 - x1, "h": y2 - y1},
+                "frame_number": _frame_number,
+                "timestamp": ts,
+                "first_seen": _track_first_seen.get(track_id, ts),
+                "jpeg_url": f"/media/{jpeg_rel}",
+                "gif_url": f"/media/{gif_rel}",
+            }
 
-                track_info["jpeg_url"] = f"/media/{jpeg_rel}" if jpeg_rel else ""
-                track_info["gif_url"] = f"/media/{gif_rel}" if gif_rel else ""
-                current_tracks[track_id] = track_info
-
-        # Draw annotations only when stream/ws clients might need them
-        annotated = results[0].plot() if results else frame.copy()
+        annotated = _draw_boxes(frame, tracked, model.names)
 
         with _lock:
             _active_tracks.clear()
             _active_tracks.update(current_tracks)
             _annotated_frame = annotated
 
-            # Keep best (highest confidence) detection per track_id
             for t in current_tracks.values():
                 tid = t.get("track_id", -1)
                 if tid < 0 or t["confidence"] < _runtime_save_conf:
@@ -427,7 +641,6 @@ def _detection_loop() -> None:
                 if existing is None or t["confidence"] > existing["confidence"]:
                     _track_detections[tid] = t
 
-        # Enqueue annotated frame for background writer (non-blocking)
         if _det_recording and _det_frame_queue is not None:
             try:
                 _det_frame_queue.put_nowait(annotated)
