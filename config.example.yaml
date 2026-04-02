@@ -5,6 +5,8 @@
 # Video capture
 # ---------------------------------------------------------------------------
 capture:
+  # Enable camera on startup (false = camera off until toggled on in UI)
+  enabled: false
   # Source: "auto" (rpicam → CSI → USB fallback), "rpicam", "csi", "usb", "file"
   #   rpicam — Picamera2 (Raspberry Pi 5 / Bookworm, recommended for CSI cameras)
   #   csi    — OpenCV V4L2 backend (legacy)
@@ -43,6 +45,8 @@ capture:
 # Object detection
 # ---------------------------------------------------------------------------
 detection:
+  # Enable detection on startup (false = paused until toggled on in UI)
+  enabled: false
   # YOLO model path (.pt, .onnx, or NCNN directory)
   # If an *_ncnn_model directory exists next to the .pt file, it is used automatically
   model_path: "./models/yolo11n.pt"

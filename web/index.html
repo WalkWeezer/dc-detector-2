@@ -31,9 +31,19 @@
         </div>
 
         <div class="status-strip">
-          <div class="ss-item">
-            <span class="ss-label">Статус</span>
-            <strong id="status-indicator">Подключение...</strong>
+          <div class="ss-item ss-toggle-item">
+            <label class="toggle-switch" title="Вкл/выкл камеру">
+              <input type="checkbox" id="cap-toggle" />
+              <span class="toggle-slider"></span>
+            </label>
+            <span class="ss-label" id="cap-toggle-label">Камера</span>
+          </div>
+          <div class="ss-item ss-toggle-item">
+            <label class="toggle-switch" title="Вкл/выкл детекцию">
+              <input type="checkbox" id="det-toggle" />
+              <span class="toggle-slider"></span>
+            </label>
+            <span class="ss-label" id="det-toggle-label">Детекция</span>
           </div>
           <div class="ss-item">
             <span class="ss-label">Треки</span>
@@ -76,11 +86,6 @@
             <section class="card">
               <header>
                 <h2>Модель и настройки</h2>
-                <label class="toggle-switch" title="Вкл/выкл детекцию">
-                  <input type="checkbox" id="det-toggle" checked />
-                  <span class="toggle-slider"></span>
-                  <span class="toggle-label" id="det-toggle-label">ВКЛ</span>
-                </label>
               </header>
               <div class="form-col">
                 <div class="form-row">

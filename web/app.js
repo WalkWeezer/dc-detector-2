@@ -24,7 +24,8 @@
     mavStatus: $('mav-status'), loraStatus: $('lora-status'),
     mavDot: $('mav-dot'), loraDot: $('lora-dot'),
     errorMessage: $('error-message'),
-    // Detection tab
+    // Status strip toggles
+    capToggle: $('cap-toggle'), capToggleLabel: $('cap-toggle-label'),
     detToggle: $('det-toggle'), detToggleLabel: $('det-toggle-label'),
     modelSelect: $('model-select'), modelSwitchBtn: $('model-switch-btn'),
     confSlider: $('conf-slider'), confVal: $('conf-val'),
@@ -164,6 +165,7 @@
     connectLoraWS();
     loadModels();
     loadConfig();
+    loadCaptureConfig();
     loadAwb();
     connectCaptureWS();
     loadSystemStats();
@@ -506,8 +508,29 @@
     } catch { /* service may not be ready */ }
   }
 
+  async function toggleCapture() {
+    const enabled = els.capToggle ? els.capToggle.checked : false;
+    try {
+      await fetchJSON(`${origin(ports.cap)}/config`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ enabled }),
+      });
+      if (enabled) startStream();
+    } catch (err) {
+      showError('Ошибка переключения камеры: ' + err.message);
+    }
+  }
+
+  async function loadCaptureConfig() {
+    try {
+      const data = await fetchJSON(`${origin(ports.cap)}/config`);
+      if (els.capToggle) els.capToggle.checked = !!data.enabled;
+    } catch { /* service may not be ready */ }
+  }
+
   async function toggleDetection() {
-    const enabled = els.detToggle ? els.detToggle.checked : true;
+    const enabled = els.detToggle ? els.detToggle.checked : false;
     if (els.detToggleLabel) els.detToggleLabel.textContent = enabled ? 'ВКЛ' : 'ВЫКЛ';
     try {
       await fetchJSON(`${origin(ports.det)}/config`, {
@@ -1130,6 +1153,7 @@
     }
 
     // Detection toggle
+    if (els.capToggle) els.capToggle.addEventListener('change', toggleCapture);
     if (els.detToggle) els.detToggle.addEventListener('change', toggleDetection);
 
     // Detection tab — config

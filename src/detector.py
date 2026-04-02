@@ -126,7 +126,7 @@ _runtime_save_conf = CONFIDENCE  # min confidence to persist detection in DB
 _runtime_imgsz = int(det_cfg.get("imgsz", 160))
 _runtime_skip = int(det_cfg.get("frame_skip", 4))
 _pending_model: str | None = None  # set by POST /model to trigger hot-swap
-_detection_enabled = True    # pause/resume inference from GUI
+_detection_enabled: bool = bool(det_cfg.get("enabled", False))
 
 _track_first_seen: dict[int, str] = {}  # track_id → ISO timestamp
 

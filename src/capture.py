@@ -61,6 +61,7 @@ log = setup_logging("capture", cfg)
 # ---------------------------------------------------------------------------
 _lock = threading.Lock()
 _latest_frame: np.ndarray | None = None
+_capture_enabled: bool = bool(cap_cfg.get("enabled", False))
 _recording = False
 _video_writer: cv2.VideoWriter | None = None
 _recording_path: str | None = None
@@ -308,6 +309,13 @@ def _capture_loop() -> None:
 
     frame_interval = 1.0 / max(FPS, 1)
     while True:
+        # Pause capture when disabled — release frame so detector gets 503
+        if not _capture_enabled:
+            with _lock:
+                _latest_frame = None
+            time.sleep(0.3)
+            continue
+
         t_start = time.monotonic()
 
         # Re-read _cap under lock — playback/stop endpoints may swap it
@@ -469,6 +477,21 @@ async def get_status():
             "playback": _playback_mode,
             "frame_available": _latest_frame is not None,
         })
+
+
+@app.get("/config")
+async def get_capture_config():
+    return JSONResponse({"enabled": _capture_enabled})
+
+
+@app.post("/config")
+async def set_capture_config(request: Request):
+    global _capture_enabled
+    body = await request.json()
+    if "enabled" in body:
+        _capture_enabled = bool(body["enabled"])
+        log.info("Capture %s", "enabled" if _capture_enabled else "disabled")
+    return JSONResponse({"enabled": _capture_enabled})
 
 
 @app.get("/awb")
