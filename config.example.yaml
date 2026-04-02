@@ -49,9 +49,13 @@ detection:
   # Confidence threshold
   confidence: 0.5
   # Input image size for YOLO (smaller = faster, larger = more accurate)
+  #   160 → ~50-60 FPS on Pi 5 (NCNN) — eco mode default
   #   320 → ~25-30 FPS on Pi 5 (NCNN)
   #   640 → ~10-15 FPS on Pi 5 (NCNN)
-  imgsz: 320
+  imgsz: 160
+  # Skip N frames between inferences (0 = process every frame)
+  # 4 = process every 5th frame — reduces CPU load significantly
+  frame_skip: 4
   # URL of the capture MJPEG stream (filled automatically by launcher)
   stream_url: "http://localhost:8001/stream"
   # Port for detection API

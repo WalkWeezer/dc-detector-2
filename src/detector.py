@@ -123,8 +123,8 @@ _det_writer_thread: threading.Thread | None = None
 # ---------------------------------------------------------------------------
 _runtime_conf = CONFIDENCE
 _runtime_save_conf = CONFIDENCE  # min confidence to persist detection in DB
-_runtime_imgsz = int(det_cfg.get("imgsz", 320))  # 320px = 2x faster than 640 on Pi 5
-_runtime_skip = 0            # skip N frames between inferences
+_runtime_imgsz = int(det_cfg.get("imgsz", 160))
+_runtime_skip = int(det_cfg.get("frame_skip", 4))
 _pending_model: str | None = None  # set by POST /model to trigger hot-swap
 _detection_enabled = True    # pause/resume inference from GUI
 
@@ -572,6 +572,13 @@ def _detection_loop() -> None:
                 log.info("Hot-swapped model to: %s", _current_model_path)
             else:
                 log.error("Model swap failed: %s", new_path)
+
+        # Frame skip — pass frame through without inference
+        if _runtime_skip > 0 and _frame_number % (_runtime_skip + 1) != 0:
+            with _lock:
+                if _annotated_frame is None:
+                    _annotated_frame = frame
+            continue
 
         ts = datetime.datetime.now().isoformat(timespec="milliseconds")
         t0 = time.perf_counter()
