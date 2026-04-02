@@ -22,7 +22,9 @@
       "Bash(python tools/analyze_flight_speed.py LOG00024.TXT)",
       "Bash(python \"c:/Users/borov/source/projects/DC-Detector-v0.2/tools/analyze_flight_speed.py\" \"c:/Users/borov/source/projects/DC-Detector-v0.2/LOG00024.TXT\")",
       "Bash(timeout /t 10 /nobreak)",
-      "Bash(python \"c:/Users/borov/source/projects/DC-Detector-v0.2/tools/analyze_flight_speed.py\" \"c:/Users/borov/source/projects/DC-Detector-v0.2/LOG00024.TXT\" --debug)"
+      "Bash(python \"c:/Users/borov/source/projects/DC-Detector-v0.2/tools/analyze_flight_speed.py\" \"c:/Users/borov/source/projects/DC-Detector-v0.2/LOG00024.TXT\" --debug)",
+      "Bash(xargs grep:*)",
+      "Bash(grep -E \"\\\\.py$|README|requirements\")"
     ]
   }
 }
